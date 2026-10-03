@@ -1,0 +1,444 @@
+// Ăn Dặm Radar — server: fans a query out to every source in parallel, streams normalized rows
+// to the browser over Server-Sent Events, then enriches the best rows with product-page details.
+import express from 'express';
+import compression from 'compression';
+import { SOURCES, byId, supports, enabled, describe } from './src/sources/index.js';
+import { MARKETS, COUNTRY_NAMES } from './src/lib/markets.js';
+import { makeItem, mergeDetail } from './src/lib/item.js';
+import { remember, del, sweep, clearAll } from './src/lib/cache.js';
+import { loadRates, rates, toVND } from './src/lib/currency.js';
+import { translate, translateQuery } from './src/lib/translate.js';
+import { canEnrich, getDetail, isPublicHttpUrl } from './src/lib/enrich.js';
+import { suggest, keywordResearch } from './src/lib/suggest.js';
+import { jsonStore } from './src/lib/store.js';
+import { request, mapLimit } from './src/lib/http.js';
+import { clean } from './src/lib/normalize.js';
+import { throttled, CooldownError } from './src/lib/limiter.js';
+import { readSettings, validate, applySettings, testSetting, PROXY_PROVIDERS } from './src/lib/settings.js';
+
+try {
+  process.loadEnvFile('.env');
+} catch { /* no .env file */ }
+
+const PORT = Number(process.env.PORT) || 3000;
+// Read on every search so a change from the settings panel applies without a restart.
+const searchTtl = () => Number(process.env.SEARCH_CACHE_HOURS || 6) * 3600e3;
+const ENRICH_CONCURRENCY = 8;
+const SESSION_DEADLINE_MS = 30000;
+// How many top rows per source get their product page fetched for details.
+const ENRICH_PLAN = { tiki: 12, concung: 6, kidsplaza: 6, rakuten: 4, off: 8, google: 7, searxng: 7, brave: 7, bing: 7, ddg: 7, siteshop: 8, tesco: 4 };
+
+const history = jsonStore('history.json', []);
+const watch = jsonStore('watchlist.json', []);
+
+const app = express();
+app.disable('x-powered-by');
+app.use(compression({ filter: (req, res) => req.path !== '/api/search' && compression.filter(req, res) }));
+app.use(express.json({ limit: '2mb' }));
+app.use(express.static('public', { maxAge: process.env.NODE_ENV === 'production' ? '1h' : 0 }));
+
+const normUrl = (u) => {
+  try {
+    const x = new URL(u);
+    x.hash = '';
+    [...x.searchParams.keys()].filter((k) => /^(utm_|fbclid|gclid|srsltid|ref)/.test(k)).forEach((k) => x.searchParams.delete(k));
+    return (x.hostname.replace(/^www\./, '') + x.pathname.replace(/\/$/, '') + x.search).toLowerCase();
+  } catch {
+    return u;
+  }
+};
+
+// ---------------- Search (SSE) ----------------
+
+app.get('/api/search', async (req, res) => {
+  const q = clean(req.query.q).slice(0, 200);
+  if (!q) return res.status(400).json({ error: 'Thiếu từ khóa' });
+  const markets = String(req.query.markets || 'vn').split(',').filter((m) => MARKETS[m]);
+  if (!markets.length) markets.push('vn');
+  const want = req.query.sources ? String(req.query.sources).split(',') : null;
+  const sources = SOURCES.filter((s) => enabled(s) && (!want || want.includes(s.id)));
+  const fresh = req.query.fresh === '1';
+  const doEnrich = req.query.enrich !== '0';
+  const overrides = typeof req.query.tr === 'object' ? req.query.tr : {};
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  const send = (event, data) => {
+    if (!res.writableEnded) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+  const ac = new AbortController();
+  res.on('close', () => ac.abort());
+  const t0 = Date.now();
+
+  const tasks = [];
+  for (const s of sources) {
+    if (s.global) tasks.push({ src: s, market: 'world' });
+    else for (const m of markets) if (supports(s, m)) tasks.push({ src: s, market: m });
+  }
+  send('meta', { q, markets, tasks: tasks.map((t) => ({ source: t.src.id, market: t.market })) });
+
+  // Each market is searched in its own language; Vietnamese tasks start immediately.
+  const trPromises = {};
+  const queryFor = (market) => {
+    const lang = market === 'world' ? 'en' : MARKETS[market].lang;
+    if (overrides[lang]) return Promise.resolve(clean(overrides[lang]));
+    if (lang === 'vi') return Promise.resolve(q);
+    trPromises[lang] ??= translateQuery(q, lang)
+      .catch(() => q)
+      .then((text) => {
+        send('translation', { lang, text });
+        return text;
+      });
+    return trPromises[lang];
+  };
+
+  const items = new Map();
+  const webByUrl = new Map();
+  const queue = [];
+  let active = 0;
+  let pendingTasks = tasks.length;
+  let finished = false;
+
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(deadline);
+    send('done', { total: items.size, ms: Date.now() - t0 });
+    res.end();
+    const h = history.get().filter((e) => !(e.q.toLowerCase() === q.toLowerCase() && e.markets.join() === markets.join()));
+    h.unshift({ q, markets, sources: want, t: Date.now(), count: items.size });
+    history.set(h.slice(0, 100));
+  };
+  const deadline = setTimeout(finish, SESSION_DEADLINE_MS);
+  const maybeFinish = () => {
+    if (!pendingTasks && !active && !queue.length) finish();
+  };
+
+  const pump = () => {
+    while (active < ENRICH_CONCURRENCY && queue.length && !ac.signal.aborted && !finished) {
+      const job = queue.shift();
+      active++;
+      getDetail(job.item, job.src, { signal: ac.signal })
+        .then((d) => {
+          mergeDetail(job.item, d, job.ctx);
+          send('patch', job.item);
+        })
+        .catch(() => {
+          job.item.enrichFailed = true;
+        })
+        .finally(() => {
+          active--;
+          pump();
+          maybeFinish();
+        });
+    }
+  };
+
+  const enqueue = (list, src, ctx) => {
+    const n = ENRICH_PLAN[src.id] ?? 0;
+    if (!n) return;
+    list.filter((i) => canEnrich(i, src))
+      .sort((a, b) => b.relevance - a.relevance)
+      .slice(0, n)
+      .forEach((item) => queue.push({ item, src, ctx }));
+    pump();
+  };
+
+  await Promise.all(tasks.map(async (t) => {
+    const start = Date.now();
+    const query = await queryFor(t.market);
+    const ctx = { market: t.market, queries: [...new Set([q, query])] };
+    send('task', { source: t.src.id, market: t.market, status: 'running', query });
+    try {
+      const key = `s:v1:${t.src.id}:${t.market}:${query.toLowerCase()}`;
+      if (fresh) del(key);
+      const lim = t.src.limit || {};
+      const { value: raw, cached } = await remember(key, searchTtl(), () => throttled(lim.perMarket ? `${t.src.id}:${t.market}` : lim.key || t.src.id, lim, () => t.src.search({
+        q: query, market: t.market === 'world' ? 'us' : t.market, signal: ac.signal,
+      })));
+      const out = [];
+      let irrelevant = 0;
+      // A shop's own search engine already judged its top hits relevant, even when the title lacks our words.
+      const trusted = t.src.kind !== 'web' && !t.src.filterIrrelevant;
+      raw.forEach((r, pos) => {
+        const relBonus = trusted ? (pos < 24 ? 0.45 : 0.2) : 0;
+        const it = makeItem({ ...r, source: t.src.id, kind: t.src.kind, market: t.market, relBonus }, ctx);
+        it.pos = pos;
+        if (t.src.kind === 'web' || t.src.dedupe) {
+          // Engines under bot suspicion return off-topic pages; drop rows that match none of the query.
+          if (it.relevance < 0.3) {
+            irrelevant++;
+            return;
+          }
+          const k = normUrl(it.url);
+          const prev = items.get(webByUrl.get(k));
+          if (prev) {
+            if (!prev.engines.includes(t.src.id)) {
+              prev.engines.push(t.src.id);
+              send('patch', prev);
+            }
+            return;
+          }
+          webByUrl.set(k, it.id);
+          it.engines = [t.src.id];
+        }
+        if (items.has(it.id)) return;
+        items.set(it.id, it);
+        out.push(it);
+      });
+      send('items', { source: t.src.id, market: t.market, items: out });
+      const warn = raw.length && !out.length && irrelevant ? 'Kết quả không liên quan — nguồn có thể đang giới hạn tạm thời' : null;
+      // Empty or all-junk answers are often a soft block: don't keep them for hours, retry next time.
+      if (!raw.length || warn) del(key);
+      send('task', { source: t.src.id, market: t.market, status: warn ? 'warn' : 'done', count: out.length, ms: Date.now() - start, cached, query, warn, hidden: irrelevant });
+      if (doEnrich) enqueue(out, t.src, ctx);
+    } catch (e) {
+      send('task', { source: t.src.id, market: t.market, status: e instanceof CooldownError ? 'cooldown' : 'error', error: e.message, ms: Date.now() - start, query });
+    } finally {
+      pendingTasks--;
+      maybeFinish();
+    }
+  }));
+});
+
+// ---------------- Product detail / translate ----------------
+
+app.post('/api/detail', async (req, res) => {
+  const item = req.body?.item;
+  if (!item?.source) return res.status(400).json({ error: 'Thiếu sản phẩm' });
+  const src = byId[item.source];
+  if (!canEnrich(item, src) || (item.url && !isPublicHttpUrl(item.url))) return res.json({ item, skipped: true });
+  try {
+    const d = await getDetail(item, src, { fresh: !!req.body.fresh });
+    res.json({ item: mergeDetail(item, d, { market: item.market }) });
+  } catch (e) {
+    res.json({ item, error: e.message });
+  }
+});
+
+app.post('/api/translate', async (req, res) => {
+  const texts = [].concat(req.body?.texts || req.body?.text || []).map((t) => String(t).slice(0, 3000));
+  const to = String(req.body?.to || 'vi');
+  try {
+    const out = await Promise.all(texts.map((t) => (t ? translate(t, to).then((r) => r.text) : '')));
+    res.json({ texts: out });
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
+// Search-query translation for the quick links (Amazon, Taobao, Rakuten…).
+app.get('/api/translate-query', async (req, res) => {
+  const q = clean(req.query.q).slice(0, 200);
+  const langs = String(req.query.langs || 'en').split(',').slice(0, 6);
+  const out = {};
+  await Promise.all(langs.map(async (l) => {
+    out[l] = await translateQuery(q, l).catch(() => q);
+  }));
+  res.json(out);
+});
+
+// ---------------- Keywords ----------------
+
+app.get('/api/suggest', async (req, res) => {
+  try {
+    res.json(await suggest(String(req.query.q || '').slice(0, 120)));
+  } catch {
+    res.json([]);
+  }
+});
+
+app.get('/api/keywords', async (req, res) => {
+  const q = clean(req.query.q).slice(0, 120);
+  if (!q) return res.status(400).json({ error: 'Thiếu từ khóa' });
+  res.json(await keywordResearch(q));
+});
+
+// ---------------- Watchlist ----------------
+
+const priceSnapshot = (it) => ({ t: Date.now(), price: it.price, currency: it.currency, priceVND: it.priceVND });
+
+app.get('/api/watchlist', (req, res) => res.json(watch.get()));
+
+app.post('/api/watchlist', (req, res) => {
+  const item = req.body?.item;
+  if (!item?.id) return res.status(400).json({ error: 'Thiếu sản phẩm' });
+  const list = watch.get();
+  let entry = list.find((e) => e.id === item.id);
+  if (!entry) {
+    entry = {
+      id: item.id, savedAt: Date.now(), item, note: '', status: 'research', targetPrice: null, tags: [],
+      history: item.price != null ? [priceSnapshot(item)] : [],
+    };
+    watch.set([entry, ...list]);
+  }
+  res.json(entry);
+});
+
+app.patch('/api/watchlist/:id', (req, res) => {
+  const list = watch.get();
+  const entry = list.find((e) => e.id === req.params.id);
+  if (!entry) return res.status(404).json({ error: 'Không tìm thấy' });
+  for (const k of ['note', 'status', 'targetPrice', 'tags', 'supplier', 'cost']) if (k in req.body) entry[k] = req.body[k];
+  watch.set([...list]);
+  res.json(entry);
+});
+
+app.delete('/api/watchlist/:id', (req, res) => {
+  watch.set(watch.get().filter((e) => e.id !== req.params.id));
+  res.json({ ok: true });
+});
+
+async function refreshEntry(entry) {
+  const src = byId[entry.item.source];
+  if (!canEnrich(entry.item, src)) return { entry, error: 'Nguồn này không hỗ trợ cập nhật giá tự động' };
+  const d = await getDetail(entry.item, src, { fresh: true });
+  if (d?.price != null) {
+    entry.item.price = d.price;
+    if (d.currency) entry.item.currency = d.currency;
+  }
+  mergeDetail(entry.item, d, { market: entry.item.market });
+  entry.item.priceVND = toVND(entry.item.price, entry.item.currency);
+  entry.checkedAt = Date.now();
+  const last = entry.history.at(-1);
+  if (entry.item.price != null && (!last || last.price !== entry.item.price || Date.now() - last.t > 6 * 3600e3)) {
+    entry.history.push(priceSnapshot(entry.item));
+    entry.history = entry.history.slice(-60);
+  }
+  return { entry, error: d?.price == null ? 'Không đọc được giá mới từ trang' : null };
+}
+
+app.post('/api/watchlist/:id/refresh', async (req, res) => {
+  const list = watch.get();
+  const entry = list.find((e) => e.id === req.params.id);
+  if (!entry) return res.status(404).json({ error: 'Không tìm thấy' });
+  try {
+    const r = await refreshEntry(entry);
+    watch.set([...list]);
+    res.json(r);
+  } catch (e) {
+    res.json({ entry, error: e.message });
+  }
+});
+
+app.post('/api/watchlist-refresh-all', async (req, res) => {
+  const list = watch.get();
+  const results = await mapLimit(list, 4, (e) => refreshEntry(e).catch((err) => ({ entry: e, error: err.message })));
+  watch.set([...list]);
+  res.json({ ok: results.filter((r) => !r.error).length, total: list.length, list });
+});
+
+// ---------------- Source settings (API keys) ----------------
+
+const isLocal = (req) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
+
+// Keys are server-side secrets: only the machine running the app may change them, and only from this app's
+// own page (a foreign site's request carries a different Origin). SETTINGS_TOKEN allows remote admin.
+function guardSettings(req, res, next) {
+  const origin = req.get('origin');
+  const sameOrigin = !origin || origin === `${req.protocol}://${req.get('host')}`;
+  const token = process.env.SETTINGS_TOKEN;
+  const allowed = isLocal(req) || (token && req.get('x-settings-token') === token);
+  if (allowed && sameOrigin) return next();
+  res.status(403).json({ error: 'Chỉ chỉnh được cài đặt trên chính máy đang chạy app.' });
+}
+
+const providersPublic = () => Object.fromEntries(Object.entries(PROXY_PROVIDERS).map(([k, p]) => [k, { name: p.name, signup: p.signup }]));
+
+app.get('/api/settings', (req, res) => {
+  res.json({ fields: readSettings(), providers: providersPublic(), editable: isLocal(req) || !!process.env.SETTINGS_TOKEN });
+});
+
+app.put('/api/settings', guardSettings, (req, res) => {
+  const { changes, errors } = validate(req.body || {});
+  if (errors.length) return res.status(400).json({ error: errors.join(' ') });
+  try {
+    applySettings(changes);
+  } catch (e) {
+    return res.status(500).json({ error: `Không ghi được file .env: ${e.message}` });
+  }
+  res.json({ fields: readSettings(), sources: describe() });
+});
+
+app.post('/api/settings/test', guardSettings, async (req, res) => {
+  res.json(await testSetting(String(req.body?.kind || ''), req.body || {}));
+});
+
+// ---------------- History / meta / misc ----------------
+
+app.get('/api/history', (req, res) => res.json(history.get()));
+app.delete('/api/history', (req, res) => {
+  history.set([]);
+  res.json({ ok: true });
+});
+
+app.get('/api/meta', (req, res) => {
+  res.json({
+    sources: describe(),
+    markets: Object.entries(MARKETS).map(([code, m]) => ({ code, name: m.name, lang: m.lang, currency: m.currency })),
+    countries: COUNTRY_NAMES,
+    rates: rates(),
+  });
+});
+
+app.post('/api/cache/clear', (req, res) => {
+  clearAll();
+  res.json({ ok: true });
+});
+
+// Image proxy: some CDNs refuse hot-linked images; the UI falls back to this on <img> error.
+app.get('/api/img', async (req, res) => {
+  const u = String(req.query.u || '');
+  if (!isPublicHttpUrl(u)) return res.status(400).end();
+  try {
+    const r = await request(u, {
+      timeout: 8000,
+      accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+      headers: { Referer: new URL(u).origin + '/' },
+    });
+    const type = r.headers.get('content-type') || '';
+    if (!type.startsWith('image/')) return res.status(415).end();
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (buf.length > 5e6) return res.status(413).end();
+    res.set({ 'Content-Type': type, 'Cache-Control': 'public, max-age=604800' }).send(buf);
+  } catch {
+    res.status(502).end();
+  }
+});
+
+// ---------------- Start ----------------
+
+sweep();
+await loadRates();
+setInterval(loadRates, 6 * 3600e3).unref();
+
+const server = app.listen(PORT, () => {
+  const off = SOURCES.filter((s) => !enabled(s)).map((s) => `${s.name} (cần ${s.needsKey})`);
+  console.log(`\n  Ăn Dặm Radar đang chạy: http://localhost:${PORT}`);
+  console.log(`  Nguồn bật: ${SOURCES.filter(enabled).map((s) => s.name).join(', ')}`);
+  if (off.length) console.log(`  Nguồn tắt: ${off.join(', ')}`);
+  console.log(`  Tỷ giá: ${rates().source}${rates().updated ? ' — ' + rates().updated : ''}\n`);
+});
+
+server.on('error', (e) => {
+  if (e.code !== 'EADDRINUSE') throw e;
+  console.error(`\n  Cổng ${PORT} đang được dùng — có thể app đã chạy sẵn ở một cửa sổ khác.`);
+  console.error(`  • Mở http://localhost:${PORT} để dùng bản đang chạy, hoặc`);
+  console.error('  • Tắt bản cũ (Ctrl + C trong cửa sổ đó), hoặc');
+  console.error('  • Đổi cổng: đặt PORT=3001 trong file .env rồi chạy lại.\n');
+  process.exit(1);
+});
+
+const shutdown = () => {
+  history.flushNow();
+  watch.flushNow();
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 1000).unref();
+};
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
+

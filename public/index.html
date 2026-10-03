@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ăn Dặm Radar</title>
+  <meta name="description" content="Tổng hợp sản phẩm ăn dặm cho bé từ nhiều search engine và sàn TMĐT — giá, thị trường, thành phần, bảo quản — để nghiên cứu sản phẩm và thị trường.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%232a78d6'/%3E%3Cpath d='M7 15h18a9 9 0 0 1-18 0z' fill='white'/%3E%3Cpath d='M19 6l-4 8' stroke='white' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="15" class="logo-bg"/><path d="M7 15h18a9 9 0 0 1-18 0z" fill="#fff"/><path d="M19 6l-4 8" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/></svg>
+      <div>
+        <div class="brand-name">Ăn Dặm Radar</div>
+        <div class="brand-sub">Nghiên cứu sản phẩm &amp; thị trường đồ ăn dặm</div>
+      </div>
+    </div>
+    <nav class="tabs" role="tablist" aria-label="Chế độ xem">
+      <button role="tab" data-tab="results" aria-selected="true">Kết quả <span class="count" id="cnt-results"></span></button>
+      <button role="tab" data-tab="insights">Tổng quan thị trường</button>
+      <button role="tab" data-tab="compare">So sánh <span class="count" id="cnt-compare"></span></button>
+      <button role="tab" data-tab="watch">Theo dõi <span class="count" id="cnt-watch"></span></button>
+      <button role="tab" data-tab="keywords">Từ khóa</button>
+      <button role="tab" data-tab="history">Lịch sử</button>
+    </nav>
+    <div class="top-actions">
+      <button class="icon-btn" id="settings-btn" title="Cài đặt nguồn dữ liệu (API key)" aria-label="Cài đặt nguồn dữ liệu">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      </button>
+      <button class="icon-btn" id="theme-btn" title="Đổi giao diện sáng/tối" aria-label="Đổi giao diện sáng/tối">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <section class="search-panel">
+    <form id="search-form" class="search-row" autocomplete="off">
+      <div class="search-box">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="q" name="q" type="search" placeholder="Tìm sản phẩm ăn dặm… vd: bánh ăn dặm Gerber, bột ăn dặm HiPP, cháo tươi cho bé" aria-label="Từ khóa tìm kiếm" required>
+        <kbd title="Nhấn / để tìm">/</kbd>
+        <ul id="suggest" class="suggest" role="listbox" hidden></ul>
+      </div>
+      <button type="submit" class="btn primary" id="search-btn">Tìm kiếm</button>
+    </form>
+
+    <div class="options-row">
+      <div class="opt-group">
+        <span class="opt-label">Thị trường</span>
+        <div id="markets" class="chips"></div>
+      </div>
+      <div class="opt-group">
+        <details class="dropdown" id="sources-dd">
+          <summary class="btn ghost small">Nguồn: <b id="sources-count"></b></summary>
+          <div class="dropdown-panel" id="sources"></div>
+        </details>
+        <label class="check" title="Mở trang sản phẩm để lấy thành phần, bảo quản, độ tuổi… (chậm hơn vài giây)"><input type="checkbox" id="opt-enrich" checked> Lấy chi tiết SP</label>
+        <label class="check" title="Bỏ qua dữ liệu đã lưu tạm, cào lại từ đầu"><input type="checkbox" id="opt-fresh"> Dữ liệu mới</label>
+      </div>
+    </div>
+
+    <div id="translations" class="translations" hidden></div>
+    <div id="status" class="status" hidden>
+      <div class="progress"><div class="progress-bar" id="progress-bar"></div></div>
+      <div class="status-line"><span id="status-text"></span></div>
+      <div id="task-chips" class="task-chips"></div>
+    </div>
+    <div id="quicklinks" class="quicklinks" hidden></div>
+  </section>
+
+  <main>
+    <!-- RESULTS -->
+    <section class="view" id="view-results" role="tabpanel">
+      <div id="empty-state" class="empty-state">
+        <h2>Tìm một lần — xem mọi nơi</h2>
+        <p>Nhập tên sản phẩm, thương hiệu hoặc nhóm hàng. Ăn Dặm Radar tìm song song trên search engine (Bing, DuckDuckGo, Bing Shopping), sàn và chuỗi Việt Nam (Tiki, Lazada, Con Cưng, Kids Plaza, Shopee…), shop nước ngoài (Amazon, Target, Tesco, Sainsbury's, Waitrose, Morrisons, Woolworths, dm, FairPrice, Rakuten, Walmart, iHerb…) và Open Food Facts — rồi gộp thành một bảng có giá quy đổi VNĐ, giá/100g, thị trường, thành phần, độ tuổi và cách bảo quản.</p>
+        <p class="small">Chọn thêm thị trường (Mỹ, Anh, Úc, Nhật…) ở trên để so sánh giá quốc tế — từ khoá được tự dịch sang ngôn ngữ từng nước.</p>
+        <div class="examples" id="examples"></div>
+      </div>
+
+      <div id="results-wrap" hidden>
+        <div class="filters" id="filters">
+          <input type="search" id="f-text" placeholder="Lọc trong kết quả…" aria-label="Lọc trong kết quả">
+          <select id="f-source" aria-label="Nguồn"><option value="">Mọi nguồn</option></select>
+          <select id="f-country" aria-label="Quốc gia"><option value="">Mọi quốc gia</option></select>
+          <select id="f-type" aria-label="Loại sản phẩm"><option value="">Mọi loại SP</option></select>
+          <select id="f-age" aria-label="Độ tuổi">
+            <option value="">Mọi độ tuổi</option>
+            <option value="0-5">Dưới 6 tháng</option>
+            <option value="6-7">6–7 tháng</option>
+            <option value="8-11">8–11 tháng</option>
+            <option value="12-99">Từ 12 tháng</option>
+          </select>
+          <span class="price-range">
+            <input type="number" id="f-min" placeholder="Giá từ (₫)" min="0" step="1000" aria-label="Giá tối thiểu">
+            <span>–</span>
+            <input type="number" id="f-max" placeholder="đến (₫)" min="0" step="1000" aria-label="Giá tối đa">
+          </span>
+          <details class="dropdown">
+            <summary class="btn ghost small">Thêm bộ lọc <b id="more-filter-count"></b></summary>
+            <div class="dropdown-panel">
+              <label class="check"><input type="checkbox" id="f-hasprice"> Chỉ SP có giá</label>
+              <label class="check"><input type="checkbox" id="f-shop"> Chỉ kênh bán (bỏ bài viết web)</label>
+              <label class="check"><input type="checkbox" id="f-relevant" checked> Ẩn kết quả ít liên quan</label>
+              <label class="check" title="Ghế ăn, thìa, bình, hộp trữ, sách nấu ăn…"><input type="checkbox" id="f-food" checked> Ẩn dụng cụ / phụ kiện (chỉ thực phẩm)</label>
+              <label class="check"><input type="checkbox" id="f-noads"> Ẩn quảng cáo / tài trợ</label>
+              <div class="dd-title">Nhãn / công bố</div>
+              <div id="f-claims"></div>
+              <div class="dd-title">Loại trừ chất gây dị ứng</div>
+              <div id="f-allergens"></div>
+            </div>
+          </details>
+          <button class="btn ghost small" id="f-reset" type="button">Xoá lọc</button>
+          <span class="spacer"></span>
+          <select id="sort" aria-label="Sắp xếp">
+            <option value="relevance">Sắp xếp: Liên quan nhất</option>
+            <option value="price-asc">Giá thấp → cao</option>
+            <option value="price-desc">Giá cao → thấp</option>
+            <option value="p100-asc">Giá/100g thấp → cao</option>
+            <option value="sold-desc">Bán chạy nhất</option>
+            <option value="rating-desc">Đánh giá cao nhất</option>
+            <option value="discount-desc">Giảm giá nhiều nhất</option>
+          </select>
+          <div class="seg" role="group" aria-label="Kiểu hiển thị">
+            <button type="button" data-view="table" aria-pressed="true" title="Bảng">Bảng</button>
+            <button type="button" data-view="grid" aria-pressed="false" title="Lưới">Lưới</button>
+          </div>
+          <details class="dropdown right">
+            <summary class="btn small">Xuất dữ liệu</summary>
+            <div class="dropdown-panel">
+              <button class="menu-item" data-export="csv">Excel / CSV (.csv)</button>
+              <button class="menu-item" data-export="tsv">Copy để dán Google Sheets</button>
+              <button class="menu-item" data-export="json">JSON (.json)</button>
+            </div>
+          </details>
+        </div>
+        <div class="result-meta" id="result-meta"></div>
+        <div id="results"></div>
+        <div class="more-wrap"><button class="btn ghost" id="more-btn" hidden>Xem thêm</button></div>
+      </div>
+    </section>
+
+    <!-- INSIGHTS -->
+    <section class="view" id="view-insights" role="tabpanel" hidden>
+      <div id="insights"></div>
+    </section>
+
+    <!-- COMPARE -->
+    <section class="view" id="view-compare" role="tabpanel" hidden>
+      <div id="compare"></div>
+    </section>
+
+    <!-- WATCHLIST -->
+    <section class="view" id="view-watch" role="tabpanel" hidden>
+      <div class="view-head">
+        <div>
+          <h2>Sản phẩm đang theo dõi</h2>
+          <p class="muted">Lưu sản phẩm tiềm năng, ghi chú nhà cung cấp, giá nhập dự kiến và theo dõi biến động giá.</p>
+        </div>
+        <div class="row-actions">
+          <button class="btn ghost" id="watch-refresh-all">Cập nhật giá tất cả</button>
+          <button class="btn ghost" id="watch-export">Xuất CSV</button>
+        </div>
+      </div>
+      <div id="watch"></div>
+    </section>
+
+    <!-- KEYWORDS -->
+    <section class="view" id="view-keywords" role="tabpanel" hidden>
+      <div class="view-head">
+        <div>
+          <h2>Nghiên cứu từ khóa</h2>
+          <p class="muted">Dựa trên gợi ý tự động của Google &amp; DuckDuckGo — phản ánh những gì người mua thực sự gõ khi tìm sản phẩm.</p>
+        </div>
+        <form id="kw-form" class="row-actions">
+          <input type="search" id="kw-q" placeholder="Từ khóa gốc, vd: bánh ăn dặm" aria-label="Từ khóa gốc">
+          <button class="btn primary" type="submit">Phân tích</button>
+        </form>
+      </div>
+      <div id="keywords"></div>
+    </section>
+
+    <!-- HISTORY -->
+    <section class="view" id="view-history" role="tabpanel" hidden>
+      <div class="view-head">
+        <div>
+          <h2>Lịch sử tìm kiếm</h2>
+          <p class="muted">Mở lại một tìm kiếm cũ gần như tức thì (dữ liệu được lưu tạm trong vài giờ).</p>
+        </div>
+        <div class="row-actions">
+          <button class="btn ghost" id="cache-clear">Xoá dữ liệu tạm</button>
+          <button class="btn ghost" id="history-clear">Xoá lịch sử</button>
+        </div>
+      </div>
+      <div id="history"></div>
+    </section>
+  </main>
+
+  <aside id="drawer" class="drawer" hidden aria-label="Chi tiết sản phẩm">
+    <div class="drawer-backdrop" data-close></div>
+    <div class="drawer-panel" role="dialog" aria-modal="true">
+      <button class="icon-btn drawer-close" data-close aria-label="Đóng">✕</button>
+      <div id="drawer-body"></div>
+    </div>
+  </aside>
+
+  <div id="settings" class="modal" hidden>
+    <div class="modal-backdrop" data-close-settings></div>
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <button class="icon-btn drawer-close" data-close-settings aria-label="Đóng">✕</button>
+      <h2 id="settings-title">Cài đặt nguồn dữ liệu</h2>
+      <p class="muted small">App chạy được không cần khóa nào. Thêm khóa miễn phí dưới đây để lấy dữ liệu ổn định hơn từ các shop chặn bot. Khóa được lưu vào file <b>.env</b> trên máy bạn, chỉ gửi tới đúng nhà cung cấp đó, và áp dụng ngay, không cần khởi động lại.</p>
+      <form id="settings-form" autocomplete="off"></form>
+    </div>
+  </div>
+
+  <div id="compare-bar" class="compare-bar" hidden>
+    <span id="compare-bar-text"></span>
+    <button class="btn small primary" id="compare-go">So sánh</button>
+    <button class="btn small ghost" id="compare-clear">Bỏ chọn</button>
+  </div>
+  <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
+  <div id="toast" class="toast" hidden></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+{
+  "name": "an-dam-radar",
+  "version": "1.0.0",
+  "description": "Ăn Dặm Radar — công cụ tổng hợp & nghiên cứu thị trường sản phẩm ăn dặm cho bé từ nhiều search engine và sàn TMĐT",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test:sources": "node scripts/test-sources.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "cheerio": "^1.2.0",
+    "compression": "^1.8.2",
+    "express": "^4.22.3"
+  }
+}
