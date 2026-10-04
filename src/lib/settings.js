@@ -37,6 +37,7 @@ export function readSettings() {
     SEARXNG_URL: { set: !!e.SEARXNG_URL, value: e.SEARXNG_URL || '' },
     SCRAPE_PROXY: describeProxy(e.SCRAPE_PROXY),
     SEARCH_CACHE_HOURS: { value: Number(e.SEARCH_CACHE_HOURS || 6) },
+    SALES_CHECK_HOURS: { value: Number(e.SALES_CHECK_HOURS || 24) },
   };
 }
 
@@ -79,6 +80,11 @@ export function validate(body) {
     const n = Number(body.SEARCH_CACHE_HOURS);
     if (!(n >= 0.5 && n <= 168)) errors.push('Thời gian lưu tạm phải từ 0,5 đến 168 giờ.');
     else changes.SEARCH_CACHE_HOURS = String(n);
+  }
+  if ('SALES_CHECK_HOURS' in body) {
+    const n = Number(body.SALES_CHECK_HOURS);
+    if (!(n >= 1 && n <= 720)) errors.push('Chu kỳ kiểm tra lượt bán phải từ 1 đến 720 giờ.');
+    else changes.SALES_CHECK_HOURS = String(n);
   }
   return { changes, errors };
 }

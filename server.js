@@ -16,6 +16,7 @@ import { clean, fold } from './src/lib/normalize.js';
 import { CooldownError } from './src/lib/limiter.js';
 import { runSearch } from './src/lib/run.js';
 import { checkProduct, createContext } from './src/lib/importcheck.js';
+import { recordListings, listTracked, dueTracked, track, untrack, saveCheck, stats as salesStats } from './src/lib/sales.js';
 import { readSettings, validate, applySettings, testSetting, PROXY_PROVIDERS } from './src/lib/settings.js';
 
 try {
@@ -191,6 +192,12 @@ app.get('/api/search', async (req, res) => {
         out.push(it);
       });
       send('items', { source: t.src.id, market: t.market, items: out });
+      // Every Vietnamese shop listing seen feeds the sales history (sold counts / reviews over time).
+      if (t.market === 'vn' && t.src.kind === 'shop') {
+        try {
+          recordListings(out.filter((i) => i.sold != null || i.reviews != null));
+        } catch { /* best-effort */ }
+      }
       const warn = raw.length && !out.length && irrelevant ? 'Kết quả không liên quan — nguồn có thể đang giới hạn tạm thời' : null;
       // Empty or all-junk answers are often a soft block: don't keep them for hours, retry next time.
       if (!raw.length || warn) del(key);
@@ -409,6 +416,55 @@ app.post('/api/settings/test', guardSettings, async (req, res) => {
 
 // ---------------- History / meta / misc ----------------
 
+// ---------------- Sales history & tracked products ----------------
+
+const SALES_CHECK_HOURS = () => Number(process.env.SALES_CHECK_HOURS || 24);
+const recheck = { running: false, done: 0, total: 0, startedAt: null, finishedAt: null, changes: [] };
+
+// Re-run the official-import check for tracked products (all due ones, or the given ids).
+async function runRecheck(ids = null) {
+  if (recheck.running) return;
+  const due = ids ? listTracked().filter((t) => ids.includes(t.id)) : dueTracked(SALES_CHECK_HOURS() * 3600e3);
+  if (!due.length) return;
+  Object.assign(recheck, { running: true, done: 0, total: due.length, startedAt: Date.now(), changes: [] });
+  const ctx = createContext(undefined);
+  try {
+    await mapLimit(due, 2, async (t) => {
+      try {
+        const r = await checkProduct(t.product, ctx);
+        const before = t.lastClass;
+        saveCheck(t.id, r);
+        if (before && before !== r.class) recheck.changes.push({ id: t.id, title: t.product.title, from: before, to: r.class, t: Date.now() });
+      } finally {
+        recheck.done++;
+      }
+    });
+  } finally {
+    recheck.running = false;
+    recheck.finishedAt = Date.now();
+  }
+}
+
+app.get('/api/sales/tracked', (req, res) => res.json({ tracked: listTracked(), recheck, stats: salesStats(), everyHours: SALES_CHECK_HOURS() }));
+
+app.post('/api/sales/track', (req, res) => {
+  const p = req.body?.product;
+  if (!p?.id || !p.title) return res.status(400).json({ error: 'Thiếu sản phẩm' });
+  res.json(track(p, req.body.result || null));
+});
+
+app.delete('/api/sales/track/:id', (req, res) => {
+  untrack(req.params.id);
+  res.json({ ok: true });
+});
+
+app.post('/api/sales/recheck', (req, res) => {
+  if (recheck.running) return res.json({ started: false, recheck });
+  const ids = Array.isArray(req.body?.ids) && req.body.ids.length ? req.body.ids : listTracked().map((t) => t.id);
+  runRecheck(ids).catch((e) => console.warn('[sales] recheck failed:', e.message));
+  res.json({ started: true, total: ids.length });
+});
+
 app.get('/api/history', (req, res) => res.json(history.get()));
 app.delete('/api/history', (req, res) => {
   history.set([]);
@@ -454,6 +510,9 @@ app.get('/api/img', async (req, res) => {
 sweep();
 await loadRates();
 setInterval(loadRates, 6 * 3600e3).unref();
+// Tracked products are re-checked automatically while the app is running (hourly look for due ones).
+setInterval(() => runRecheck().catch(() => {}), 3600e3).unref();
+setTimeout(() => runRecheck().catch(() => {}), 60e3).unref();
 
 const server = app.listen(PORT, () => {
   const off = SOURCES.filter((s) => !enabled(s)).map((s) => `${s.name} (cần ${s.needsKey})`);

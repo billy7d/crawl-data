@@ -12,6 +12,7 @@ import { canEnrich, getDetail, gtinOf } from './enrich.js';
 import { translate } from './translate.js';
 import { clean, fold, guessBrand, parseQuantity } from './normalize.js';
 import { hostOf } from './markets.js';
+import { recordListings, productHistory, listingHistory } from './sales.js';
 
 // Vietnamese listing sources, in the order evidence is most trustworthy.
 const VN_SOURCES = ['concung', 'kidsplaza', 'tiki', 'lazada', 'siteshop', 'gshop'];
@@ -285,6 +286,14 @@ export async function checkProduct(p, ctx) {
   if (uncertain) reasons.unshift(`Chưa chắc: không kiểm tra được ${missingKey.join(', ')} (bị giới hạn tạm thời) — chạy lại sau ít phút`);
   else if (failed.length) reasons.push(`Thiếu dữ liệu từ: ${failed.join(', ')}`);
 
+  // Sales history: snapshot the matched Vietnamese listings, then read back their trend.
+  const strongListings = strong.map((x) => ({ ...x.l, chain: chainOf(x.l) }));
+  try {
+    recordListings(matches.map((x) => ({ ...x.l, chain: chainOf(x.l) })));
+  } catch { /* history is best-effort */ }
+  const history = strongListings.length ? productHistory(strongListings) : null;
+  if (history?.soldPerWeek) reasons.push(`Tốc độ bán tại VN: ~${history.soldPerWeek}/tuần (theo dõi ${history.trackedDays} ngày)`);
+
   return {
     id: p.id,
     product: {
@@ -306,10 +315,12 @@ export async function checkProduct(p, ctx) {
       minPriceVND: prices[0] ?? null, maxPriceVND: prices.at(-1) ?? null,
       official: strong.filter((x) => officialStore(x.l)).length,
     },
+    history,
     matches: matches.map(({ l, score }) => ({
       title: l.title, url: l.url, image: l.image, source: l.source, seller: l.seller, domain: l.domain, priceVND: l.priceVND,
       sold: l.sold, rating: l.rating, reviews: l.reviews, importer: l.importer || null, chain: chainOf(l), official: officialStore(l),
       handCarried: HAND_CARRIED.test(l.title), score: Math.round(score * 100) / 100,
+      soldPerWeek: score >= 0.65 ? listingHistory(l).soldPerWeek : null,
     })),
     queries: [specificQuery, id.brand].filter(Boolean),
   };

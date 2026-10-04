@@ -321,6 +321,7 @@ async function init() {
   bindEvents();
   bindSettings();
   bindImport();
+  refreshTracked();
   refreshWatch();
   renderCompareBar();
 
@@ -1316,6 +1317,7 @@ function renderImport() {
   const all = [...S.imp.results.values()];
   $('#cnt-import').textContent = all.filter((r) => r.class !== 'nkcn').length || '';
   if (S.tab !== 'import') return;
+  $('#imp-tracked').innerHTML = trackedHtml();
   const counts = Object.fromEntries(Object.keys(IMP_CLASSES).map((k) => [k, all.filter((r) => r.class === k).length]));
   const secs = ((performance.now() - (S.imp.t0 || performance.now())) / 1000).toFixed(0);
   $('#imp-run').disabled = S.imp.running;
@@ -1335,6 +1337,69 @@ function renderImport() {
     <table class="simple"><thead><tr><th>Thương hiệu</th><th>Công ty</th></tr></thead><tbody>${imps.map((x) => `<tr><td><b>${esc(x.brand)}</b></td><td>${esc(x.importer)}</td></tr>`).join('')}</tbody></table></div>` : '';
 }
 
+// ---- Tracked products: sales history and re-checks ----
+
+S.sales = { tracked: [], recheck: null, everyHours: 24, timer: null };
+const isTracked = (id) => S.sales.tracked.some((t) => t.id === id);
+
+async function refreshTracked() {
+  try {
+    const d = await api('/api/sales/tracked');
+    Object.assign(S.sales, { tracked: d.tracked, recheck: d.recheck, everyHours: d.everyHours, stats: d.stats });
+  } catch { /* server not reachable */ }
+  clearTimeout(S.sales.timer);
+  if (S.sales.recheck?.running) S.sales.timer = setTimeout(refreshTracked, 4000);
+  if (S.tab === 'import') renderImport();
+}
+
+async function toggleTrack(id) {
+  if (isTracked(id)) {
+    await api(`/api/sales/track/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    toast('Đã bỏ theo dõi lượt bán');
+  } else {
+    const r = S.imp.results.get(id);
+    if (!r) return;
+    await api('/api/sales/track', { method: 'POST', body: { product: r.product, result: r } });
+    toast('Đã theo dõi — app sẽ kiểm tra lại định kỳ và lưu lịch sử lượt bán');
+  }
+  await refreshTracked();
+}
+
+const salesLine = (h) => {
+  if (!h) return '';
+  const rate = h.soldPerWeek != null ? `<b>~${fmtCompact(h.soldPerWeek)}/tuần</b>` : h.reviewsPerWeek ? `~${fmtCompact(h.reviewsPerWeek)} đánh giá mới/tuần` : null;
+  const spark = h.series?.length > 1 ? sparkline(h.series) : '';
+  return `<div class="small">${rate ? `Tốc độ bán: ${rate}` : `<span class="muted">Tốc độ bán: cần thêm lần ghi (đã ghi ${h.snapshots || 0} lần, ${h.trackedDays || 0} ngày)</span>`} ${spark}</div>`;
+};
+
+function trackedHtml() {
+  const list = S.sales.tracked;
+  const rc = S.sales.recheck;
+  if (!list.length) return '';
+  const changes = rc?.changes?.length ? `<div class="set-msg ok" style="margin-bottom:8px">Thay đổi ở lần kiểm tra gần nhất: ${rc.changes.map((c) => `<b>${esc(c.title)}</b>: ${esc(IMP_CLASSES[c.from]?.[0] || c.from)} → ${esc(IMP_CLASSES[c.to]?.[0] || c.to)}`).join(' · ')}</div>` : '';
+  return `<div class="panel" style="margin-bottom:14px">
+    <h3>Đang theo dõi lượt bán (${list.length}) <span class="muted">tự kiểm tra lại mỗi ${S.sales.everyHours} giờ khi app đang chạy</span></h3>
+    ${changes}
+    <div class="row-actions" style="margin-bottom:8px">
+      <button class="btn small" data-recheck-all ${rc?.running ? 'disabled' : ''}>${rc?.running ? `Đang kiểm tra ${rc.done}/${rc.total}…` : 'Kiểm tra lại tất cả ngay'}</button>
+      <span class="small muted">${S.sales.stats ? `Đã lưu ${fmtNum(S.sales.stats.snapshots)} bản chụp của ${fmtNum(S.sales.stats.listings)} tin bán tại VN` : ''}</span>
+    </div>
+    <table class="simple"><thead><tr><th></th><th>Sản phẩm</th><th>Kết luận hiện tại</th><th>Diễn biến</th><th>Lượt bán tại VN</th><th>Kiểm tra</th><th></th></tr></thead><tbody>
+    ${list.map((t) => {
+      const r = t.result;
+      const hist = t.classHistory.map((h) => `${esc(IMP_CLASSES[h.class]?.[0] || h.class)} (${new Date(h.t).toLocaleDateString('vi-VN')})`).join(' → ');
+      return `<tr>
+        <td>${img(t.product.image, 'mini-thumb')}</td>
+        <td><a href="${esc(t.product.url || '#')}" target="_blank" rel="noopener noreferrer">${esc(t.product.title)}</a><div class="small muted">${esc(t.product.brand || '')} · ${esc(countryName(t.product.country))}</div></td>
+        <td>${r ? `<span class="cls ${r.class}">${esc(IMP_CLASSES[r.class][0])}</span>${r.importers?.length ? `<div class="small">${esc(r.importers.join('; '))}</div>` : ''}` : '<span class="muted">chưa kiểm tra</span>'}</td>
+        <td class="small">${hist || '—'}</td>
+        <td>${r?.vn?.sold ? `${fmtCompact(r.vn.sold)} đã bán` : '—'}${salesLine(r?.history)}</td>
+        <td class="small muted">${t.lastCheck ? timeAgo(t.lastCheck) : '—'}</td>
+        <td><button class="btn small ghost" data-recheck="${esc(t.id)}" ${rc?.running ? 'disabled' : ''}>Kiểm tra</button> <button class="btn small ghost" data-untrack="${esc(t.id)}">Bỏ</button></td>
+      </tr>`;
+    }).join('')}</tbody></table></div>`;
+}
+
 function impRow(r) {
   const p = r.product;
   const [label] = IMP_CLASSES[r.class];
@@ -1346,6 +1411,7 @@ function impRow(r) {
     vn.official ? `${vn.official} gian hàng chính hãng/Mall` : '',
     vn.sold ? `Đã bán tại VN: <b>${fmtCompact(vn.sold)}</b>` : '',
     vn.handCarried ? `<span class="tag ad">${vn.handCarried} tin xách tay</span>` : '',
+    r.history ? salesLine(r.history) : '',
     r.class === 'brand' || r.class === 'absent' ? `Thương hiệu: ${r.brandListings} tin bán tại VN` : '',
   ].filter(Boolean).join('<br>');
   const matches = r.matches.length ? `<details class="imp-matches"><summary>Xem ${r.matches.length} tin bán tại VN</summary>${r.matches.map((m) => `
@@ -1359,7 +1425,8 @@ function impRow(r) {
     <td class="c-title"><a class="p-title" href="${esc(p.url || '#')}" target="_blank" rel="noopener noreferrer">${esc(p.title)}</a>
       <div class="p-sub">${p.brand ? `<b>${esc(p.brand)}</b> · ` : ''}${flag(p.country)} ${esc(countryName(p.country))} · ${esc(S.srcName[p.source] || p.source)}</div>
       ${p.rating || p.reviews ? `<div class="rate"><span class="star">★</span> ${fmtNum(p.rating, 1)}${p.reviews ? ` (${fmtCompact(p.reviews)} đánh giá)` : ''}</div>` : ''}</td>
-    <td><span class="cls ${r.class}">${esc(label)}</span>${r.uncertain ? ' <span class="tag ad" title="Một số kênh VN chính không trả lời — kết luận có thể sai">chưa chắc</span>' : ''}<ul class="imp-reasons">${r.reasons.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></td>
+    <td><span class="cls ${r.class}">${esc(label)}</span>
+      <button class="btn small ghost" style="margin-left:4px" data-track="${esc(r.id)}" title="Lưu lịch sử lượt bán và tự kiểm tra lại định kỳ">${isTracked(r.id) ? '★ Đang theo dõi' : '☆ Theo dõi'}</button>${r.uncertain ? ' <span class="tag ad" title="Một số kênh VN chính không trả lời — kết luận có thể sai">chưa chắc</span>' : ''}<ul class="imp-reasons">${r.reasons.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></td>
     <td class="small">${evidence}${matches}</td>
     <td class="c-price tnum">${p.priceVND ? fmtVND(p.priceVND) : '—'}<div class="muted small">VN: ${vn.minPriceVND ? fmtShortVND(vn.minPriceVND) + (vn.maxPriceVND > vn.minPriceVND ? `–${fmtShortVND(vn.maxPriceVND)}` : '') : '—'}</div></td>
   </tr>`;
@@ -1378,6 +1445,22 @@ function exportImport() {
 function bindImport() {
   $('#imp-run').addEventListener('click', runImportCheck);
   $('#imp-export').addEventListener('click', exportImport);
+  $('#view-import').addEventListener('click', async (e) => {
+    const tr = e.target.closest('[data-track]');
+    if (tr) return toggleTrack(tr.dataset.track);
+    const un = e.target.closest('[data-untrack]');
+    if (un) {
+      await api(`/api/sales/track/${encodeURIComponent(un.dataset.untrack)}`, { method: 'DELETE' });
+      return refreshTracked();
+    }
+    const one = e.target.closest('[data-recheck]');
+    const all = e.target.closest('[data-recheck-all]');
+    if (one || all) {
+      const r = await api('/api/sales/recheck', { method: 'POST', body: { ids: one ? [one.dataset.recheck] : [] } });
+      toast(r.started ? `Đang kiểm tra lại ${r.total} sản phẩm…` : 'Đang có lượt kiểm tra khác chạy');
+      setTimeout(refreshTracked, 500);
+    }
+  });
   $('#imp-filters').addEventListener('click', (e) => {
     const b = e.target.closest('[data-imp-filter]');
     if (!b) return;
@@ -1480,6 +1563,11 @@ function renderSettings() {
       <p class="muted small">Tìm lại cùng từ khóa trong khoảng này sẽ gần như tức thì và đỡ bị chặn hơn.</p>
       <div class="set-row"><input type="number" name="SEARCH_CACHE_HOURS" min="0.5" max="168" step="0.5" value="${fields.SEARCH_CACHE_HOURS.value}" style="flex:0 1 120px" aria-label="Số giờ lưu tạm"> <span class="small muted">giờ</span></div>
     </div>
+    <div class="set-card">
+      <div class="set-head"><h3>Chu kỳ kiểm tra lượt bán</h3></div>
+      <p class="muted small">Sản phẩm đang theo dõi (tab Cơ hội nhập khẩu) được kiểm tra lại tự động sau mỗi khoảng này, khi app đang chạy.</p>
+      <div class="set-row"><input type="number" name="SALES_CHECK_HOURS" min="1" max="720" step="1" value="${fields.SALES_CHECK_HOURS?.value ?? 24}" style="flex:0 1 120px" aria-label="Số giờ giữa hai lần kiểm tra"> <span class="small muted">giờ</span></div>
+    </div>
     <div class="set-foot">
       ${editable ? '<span class="small muted">Ô để trống = giữ nguyên giá trị hiện tại.</span>' : '<span class="small set-msg err">Chỉ chỉnh được trên chính máy đang chạy app.</span>'}
       <button type="button" class="btn ghost" data-close-settings>Đóng</button>
@@ -1504,6 +1592,7 @@ function settingsPayload(form, only) {
     }
   }
   if (!only && Number(v('SEARCH_CACHE_HOURS')) !== settingsData.fields.SEARCH_CACHE_HOURS.value) body.SEARCH_CACHE_HOURS = v('SEARCH_CACHE_HOURS');
+  if (!only && Number(v('SALES_CHECK_HOURS')) !== settingsData.fields.SALES_CHECK_HOURS.value) body.SALES_CHECK_HOURS = v('SALES_CHECK_HOURS');
   return body;
 }
 
@@ -1614,7 +1703,10 @@ function switchTab(tab) {
   });
   if (tab === 'insights') renderInsights();
   if (tab === 'compare') renderCompare();
-  if (tab === 'import') renderImport();
+  if (tab === 'import') {
+    renderImport();
+    refreshTracked();
+  }
   if (tab === 'watch') renderWatch();
   if (tab === 'history') renderHistory();
   if (tab === 'keywords' && !$('#keywords').innerHTML && (S.q || $('#q').value)) runKeywords(S.q || $('#q').value);
