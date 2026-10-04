@@ -45,19 +45,22 @@ export default {
     const query = `${q} (${sites.map((s) => `site:${s}`).join(' OR ')})`;
     // Most robust provider first: keyed APIs / self-hosted SearXNG, then DuckDuckGo (honours site:/OR well),
     // then Bing. Each failure or empty answer falls through to the next one.
+    // A keyed provider (Serper/Brave) that answers is trusted even when empty: falling through to the free
+    // engines then only adds captcha errors and minutes of waiting for the same "nothing".
     const providers = [
-      process.env.SERPER_API_KEY && (() => serperWeb(query, market, signal)),
-      process.env.SEARXNG_URL && (() => searxngWeb(query, market, signal)),
-      process.env.BRAVE_API_KEY && (() => throttled('brave', { concurrency: 1, gap: 1100 }, () => braveWeb(query, market, signal))),
-      () => throttled('ddg', DDG_LIMIT, () => ddgWeb(query, market, signal)),
-      () => throttled('bing', { concurrency: 2, gap: 700 }, () => bingWeb(query, market, signal)),
+      process.env.SERPER_API_KEY && [true, () => serperWeb(query, market, signal)],
+      process.env.SEARXNG_URL && [false, () => searxngWeb(query, market, signal)],
+      process.env.BRAVE_API_KEY && [true, () => throttled('brave', { concurrency: 1, gap: 1100 }, () => braveWeb(query, market, signal))],
+      [false, () => throttled('ddg', DDG_LIMIT, () => ddgWeb(query, market, signal))],
+      [false, () => throttled('bing', { concurrency: 2, gap: 700 }, () => bingWeb(query, market, signal))],
     ].filter(Boolean);
     let rows = [];
     let lastError = null;
-    for (const p of providers) {
+    for (const [keyed, p] of providers) {
       try {
         rows = (await p()).filter((r) => sites.some((s) => hostOf(r.url) === s || hostOf(r.url).endsWith('.' + s)));
-        if (rows.length) break;
+        lastError = null;
+        if (rows.length || keyed) break;
       } catch (e) {
         lastError = e;
       }

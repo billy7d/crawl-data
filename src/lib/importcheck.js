@@ -149,30 +149,62 @@ function chainOf(l) {
 
 const officialStore = (l) => !!(l.extra?.lazMall || l.extra?.official || /tiki trading|official|chính hãng|mall/i.test(l.seller || ''));
 
-// Run every enabled Vietnamese source for a query (cached; failures are reported, not thrown).
-async function vnListings(query, ctx) {
+// Fast pass: how long to wait for Vietnamese sources / product pages before answering with what has
+// arrived. Slow sources (Lazada through the premium proxy can take 10–40s) keep running; the complete
+// pass then reuses the same in-flight requests and corrects the answer.
+const FAST_LIST_MS = 9000;
+const FAST_DETAIL_MS = 6000;
+const SLOW_SOURCES = ['lazada'];
+const SLOW_GRACE_MS = 1000;
+const LATE = Symbol('late');
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Promise.race with a timer; never rejects (failures come back as { error }).
+const within = (p, ms) => {
+  const settled = p.then((v) => ({ v }), (error) => ({ error }));
+  return ms == null ? settled : Promise.race([settled, sleep(ms).then(() => LATE)]);
+};
+
+// One request per Vietnamese source per query, shared by every product and both passes of a run.
+function sourceRuns(query, ctx) {
+  const key = fold(query);
+  if (!ctx.queries.has(key)) {
+    ctx.queries.set(key, VN_SOURCES.map((id) => byId[id]).filter((s) => s && enabled(s)).map((src) => ({
+      id: src.id,
+      name: src.name,
+      p: runSearch(src, 'vn', query, { signal: ctx.signal })
+        .then(({ value }) => value.map((r) => makeItem({ ...r, source: src.id, kind: src.kind, market: 'vn' }, { market: 'vn' }))),
+    })));
+  }
+  return ctx.queries.get(key);
+}
+
+// Listings of every enabled Vietnamese source for a query (failures are reported, not thrown).
+// wait: ms to wait in the fast pass; sources still running then are reported as pending.
+async function vnListings(query, ctx, wait) {
+  const runs = sourceRuns(query, ctx);
+  let out;
+  if (wait == null) out = await Promise.all(runs.map((r) => within(r.p, null)));
+  else {
+    // Fast pass: stop waiting once every normally-fast source has answered (+ a short grace for the slow
+    // ones, which answer quickly too when they aren't going through the proxy).
+    const settled = runs.map((r) => r.p.then(() => {}, () => {}));
+    const fastDone = Promise.all(settled.filter((_, i) => !SLOW_SOURCES.includes(runs[i].id))).then(() => sleep(SLOW_GRACE_MS));
+    await Promise.race([Promise.all(settled), sleep(wait), fastDone]);
+    out = await Promise.all(runs.map((r) => within(r.p, 0)));
+  }
   const items = [];
   const failed = [];
-  await Promise.all(VN_SOURCES.map((id) => byId[id]).filter((s) => s && enabled(s)).map(async (src) => {
-    try {
-      const { value } = await runSearch(src, 'vn', query, { signal: ctx.signal });
-      for (const r of value) items.push(makeItem({ ...r, source: src.id, kind: src.kind, market: 'vn' }, { market: 'vn' }));
-    } catch {
-      failed.push(src.name);
-    }
-  }));
-  return { items, failed };
+  const pending = [];
+  out.forEach((x, i) => {
+    if (x === LATE) pending.push(runs[i].name);
+    else if (x.error) failed.push(runs[i].name);
+    else items.push(...x.v);
+  });
+  return { items, failed, pending };
 }
 
 export function createContext(signal) {
-  return { signal, brandCache: new Map(), detailCache: new Map(), importers: new Map() };
-}
-
-// Brand-level listings are shared by every product of that brand in one run.
-function brandListings(brand, ctx) {
-  const key = fold(brand);
-  if (!ctx.brandCache.has(key)) ctx.brandCache.set(key, vnListings(brand, ctx).catch(() => ({ items: [], failed: ['tất cả kênh'] })));
-  return ctx.brandCache.get(key);
+  return { signal, queries: new Map(), detailCache: new Map(), importers: new Map() };
 }
 
 // Sources whose silence makes "not sold in Vietnam" unreliable.
@@ -247,20 +279,40 @@ function brandInterest(brand, ctx) {
   return ctx.interest.get(key);
 }
 
-export async function checkProduct(p, ctx) {
+// fast: answer from the sources/pages that respond within a few seconds; the result lists what is still
+// pending, and calling again without fast (same ctx) gives the complete answer.
+export async function checkProduct(p, ctx, { fast = false } = {}) {
+  const listWait = fast ? FAST_LIST_MS : undefined;
+  const detailWait = fast ? FAST_DETAIL_MS : undefined;
+  const pendingDetails = { n: 0 };
+  // Value of a shared promise, or `fallback` if it isn't ready within the fast-pass budget.
+  const soon = async (promise, fallback, ms = detailWait) => {
+    const x = await within(promise, ms);
+    if (x === LATE) {
+      pendingDetails.n++;
+      return fallback;
+    }
+    return x.error ? fallback : x.v;
+  };
+
   const id = identityOf(p);
-  const viTitle = await translate(p.title, 'vi').then((r) => r.text).catch(() => '');
+  const none = { items: [], failed: [], pending: [] };
+  // Translation, brand search and brand interest are independent: start them together.
+  const viTitleP = translate(p.title, 'vi').then((r) => r.text).catch(() => '');
+  const byBrandP = id.brand ? vnListings(id.brand, ctx, listWait) : Promise.resolve(none);
+  const interestP = id.brand ? brandInterest(id.brand, ctx) : Promise.resolve(null);
+  const [viTitle, byBrand] = await Promise.all([viTitleP, byBrandP]);
   const idVi = distinctive(viTitle, id.brand);
 
   const specificQuery = clean([id.brand, ...id.words.slice(0, 4)].filter(Boolean).join(' ')) || p.title;
   // One brand-level search per brand; a product-specific search only when it can change the answer:
   // the brand is sold in Vietnam but this product isn't in the brand's top results, or the brand is unknown.
-  const byBrand = id.brand ? await brandListings(id.brand, ctx) : { items: [], failed: [] };
   const brandPresent = byBrand.items.some((l) => brandIn(l, id.brand));
   const score = (l) => matchScore(id, idVi, l);
   const needSpecific = !id.brand || (brandPresent && !byBrand.items.some((l) => score(l) >= 0.65));
-  const bySpecific = needSpecific ? await vnListings(specificQuery, ctx) : { items: [], failed: [] };
+  const bySpecific = needSpecific ? await vnListings(specificQuery, ctx, listWait) : none;
   const failed = [...new Set([...byBrand.failed, ...bySpecific.failed])];
+  const pendingSources = [...new Set([...byBrand.pending, ...bySpecific.pending])];
 
   const seen = new Set();
   const urlKey = (l) => (l.url || l.id).split(/[?#]/)[0].replace(/\/$/, '').toLowerCase();
@@ -271,7 +323,7 @@ export async function checkProduct(p, ctx) {
     .sort((a, b) => b.score - a.score).slice(0, 12);
 
   // Read the best matches' pages for the importer/distributor (Tiki/Lazada/chain product pages).
-  const detailed = await Promise.all(scored.slice(0, 8).map(async (x) => ({ ...x, l: await withDetails(x.l, ctx) })));
+  const detailed = await Promise.all(scored.slice(0, 8).map(async (x) => ({ ...x, l: await soon(withDetails(x.l, ctx), x.l) })));
   const matches = [...detailed, ...scored.slice(8)];
 
   const strong = matches.filter((x) => x.score >= 0.65);
@@ -290,7 +342,7 @@ export async function checkProduct(p, ctx) {
   const sold = matches.reduce((s, x) => s + (x.l.sold || 0), 0);
   const prices = matches.map((x) => x.l.priceVND).filter(Boolean).sort((a, b) => a - b);
 
-  const brandImp = !importers.length && brandHits.length && id.brand ? await brandImporter(id.brand, brandHits, ctx) : null;
+  const brandImp = !importers.length && brandHits.length && id.brand ? await soon(brandImporter(id.brand, brandHits, ctx), null) : null;
   const importerText = importers.length ? `Nhà nhập khẩu/phân phối: ${importers.join('; ')}`
     : brandImp ? `Nhà phân phối của thương hiệu (thấy trên SP khác cùng hãng): ${brandImp}` : null;
 
@@ -317,13 +369,15 @@ export async function checkProduct(p, ctx) {
     reasons.push(id.brand ? `Không thấy thương hiệu ${id.brand} trên các kênh VN đã kiểm tra` : 'Không thấy sản phẩm trên các kênh VN đã kiểm tra');
   }
   const brandDistributor = brandImp || (id.brand ? ctx.importers.get(fold(id.brand))?.importer : null)
-    || (cls === 'brand' && id.brand ? await brandImporter(id.brand, brandHits, ctx) : null);
+    || (cls === 'brand' && id.brand ? await soon(brandImporter(id.brand, brandHits, ctx), null) : null);
   if (cls === 'brand' && brandDistributor) reasons.push(`Thương hiệu đã có nhà phân phối: ${brandDistributor} — có thể đề xuất họ nhập thêm SP này`);
   // "Not found" only means something if the main Vietnamese channels actually answered.
   const missingKey = failed.filter((f) => KEY_SOURCES.includes(f));
   const uncertain = (cls === 'absent' || cls === 'brand') && missingKey.length > 0;
   if (uncertain) reasons.unshift(`Chưa chắc: không kiểm tra được ${missingKey.join(', ')} (bị giới hạn tạm thời) — chạy lại sau ít phút`);
   else if (failed.length) reasons.push(`Thiếu dữ liệu từ: ${failed.join(', ')}`);
+  const pending = [...pendingSources, ...(pendingDetails.n ? ['trang chi tiết (nhà nhập khẩu)'] : [])];
+  if (pending.length) reasons.push(`Đang bổ sung: ${pending.join(', ')} — kết quả sẽ tự cập nhật`);
 
   // Sales history: snapshot the matched Vietnamese listings, then read back their trend.
   const strongListings = strong.map((x) => ({ ...x.l, chain: chainOf(x.l) }));
@@ -331,7 +385,9 @@ export async function checkProduct(p, ctx) {
     recordListings(matches.map((x) => ({ ...x.l, chain: chainOf(x.l) })));
   } catch { /* history is best-effort */ }
   const history = strongListings.length ? productHistory(strongListings) : null;
-  const interest = id.brand ? await brandInterest(id.brand, ctx) : null;
+  // Autocomplete is a side signal: don't hold a fast answer (or trigger a complete pass) for it.
+  const interestX = await within(interestP, fast ? 3000 : undefined);
+  const interest = interestX === LATE || interestX.error ? null : interestX.v;
   if (history?.soldPerWeek) reasons.push(`Tốc độ bán tại VN: ~${history.soldPerWeek}/tuần (theo dõi ${history.trackedDays} ngày)`);
 
   return {
@@ -344,6 +400,7 @@ export async function checkProduct(p, ctx) {
     class: cls,
     uncertain,
     failed,
+    pending,
     confidence: strong[0]?.score ?? matches[0]?.score ?? 0,
     reasons,
     chains,

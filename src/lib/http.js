@@ -21,6 +21,32 @@ const viaProxy = (url, extra = '') => {
   return t.replace('{url}', encodeURIComponent(url));
 };
 
+// Scraping proxies cap simultaneous requests per plan (ScraperAPI free: 5) and answer 429 above it.
+// Queue instead of firing everything at once, so a busy import check doesn't turn into fake "blocks".
+// Slow requests (lane 'slow': Lazada's premium pool, 10–35s each) may not take the last three slots, so quick
+// proxied requests (Tiki, ~3s) never queue behind them.
+let proxyActive = 0;
+let slowActive = 0;
+let proxyWaiters = [];
+async function withProxySlot(lane, fn) {
+  const max = Math.max(1, Number(process.env.PROXY_CONCURRENCY) || 5);
+  const slowMax = Math.max(1, max - 3);
+  const free = () => proxyActive < max && (lane !== 'slow' || slowActive < slowMax);
+  while (!free()) await new Promise((r) => proxyWaiters.push(r));
+  proxyActive++;
+  if (lane === 'slow') slowActive++;
+  try {
+    return await fn();
+  } finally {
+    proxyActive--;
+    if (lane === 'slow') slowActive--;
+    // Wake everyone: a waiter of the other lane may be the one that can go now.
+    const w = proxyWaiters;
+    proxyWaiters = [];
+    w.forEach((r) => r());
+  }
+}
+
 export class HttpError extends Error {
   constructor(message, status) {
     super(message);
@@ -74,12 +100,22 @@ export async function request(url, {
 }
 
 // proxy: 'fallback' retries through SCRAPE_PROXY when the site blocks us; 'always' goes through it directly.
-export async function fetchText(url, { proxy, proxyExtra, ...opts } = {}) {
+// proxyTimeout: how long to wait for the proxy (default 70s); proxyLane 'slow' for slow proxy requests.
+export async function fetchText(url, { proxy, proxyExtra, proxyTimeout = 70000, proxyLane, ...opts } = {}) {
   const useProxy = proxy && proxyEnabled();
-  const proxied = async () => {
-    const res = await request(viaProxy(url, proxyExtra), { ...opts, timeout: 70000 }); // proxies render JS and retry: slow
+  const proxied = () => withProxySlot(proxyLane, async () => {
+    const go = () => request(viaProxy(url, proxyExtra), { ...opts, timeout: proxyTimeout }); // proxies retry internally: slow
+    let res;
+    try {
+      res = await go();
+    } catch (e) {
+      // 429 from the proxy = its concurrency limit (another run, another app on the same key): retry once.
+      if (e.status !== 429 || opts.signal?.aborted) throw e;
+      await new Promise((r) => setTimeout(r, 1500));
+      res = await go();
+    }
     return { text: await res.text(), url, status: res.status, proxied: true };
-  };
+  });
   if (useProxy && proxy === 'always') return proxied();
   try {
     const res = await request(url, opts);

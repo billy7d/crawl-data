@@ -1414,11 +1414,12 @@ function renderImport() {
   $('#imp-tracked').innerHTML = trackedHtml();
   const counts = Object.fromEntries(Object.keys(IMP_CLASSES).map((k) => [k, all.filter((r) => r.class === k).length]));
   const secs = ((performance.now() - (S.imp.t0 || performance.now())) / 1000).toFixed(0);
+  const pendingN = all.filter((r) => r.pending?.length).length;
   $('#imp-run').disabled = S.imp.running;
   $('#imp-run').textContent = S.imp.running ? 'Đang phân tích…' : `Phân tích ${importCandidates().length} sản phẩm nước ngoài`;
   $('#imp-status').innerHTML = !S.imp.total
     ? `<span>Bước 1: tìm sản phẩm với các thị trường nước ngoài (nút <b>Âu–Mỹ–Úc</b>). Bước 2: bấm <b>Phân tích</b> — app tìm từng sản phẩm trên các kênh Việt Nam và phân loại.</span>`
-    : `${S.imp.running ? '<span class="loading-dots">Đang kiểm tra</span>' : 'Đã kiểm tra'} <b>${all.length}</b>/${S.imp.total} sản phẩm${S.imp.running ? ` · ${secs}s` : ''}`;
+    : `${S.imp.running ? '<span class="loading-dots">Đang kiểm tra</span>' : 'Đã kiểm tra'} <b>${all.length}</b>/${S.imp.total} sản phẩm${S.imp.running ? ` · ${secs}s` : ''}${pendingN ? ` · đang bổ sung dữ liệu chậm (Lazada, trang chi tiết) cho <b>${pendingN}</b> SP — bảng tự cập nhật` : ''}`;
   $('#imp-filters').innerHTML = all.length ? [['', `Tất cả (${all.length})`], ...Object.entries(IMP_CLASSES).map(([k, [label]]) => [k, `${label} (${counts[k]})`])]
     .map(([k, label]) => `<button type="button" class="chip" data-imp-filter="${k}" aria-pressed="${S.imp.filter === k}" title="${esc(IMP_CLASSES[k]?.[1] || '')}">${k ? `<span class="cls ${k}">●</span>` : ''}${esc(label)}</button>`).join('') : '';
   const rows = all.filter((r) => !S.imp.filter || r.class === S.imp.filter).sort((a, b) => impScore(b) - impScore(a));
@@ -1529,7 +1530,7 @@ function impRow(r) {
       ${p.rating || p.reviews ? `<div class="rate"><span class="star">★</span> ${fmtNum(p.rating, 1)}${p.reviews ? ` (${fmtCompact(p.reviews)} đánh giá)` : ''}</div>` : ''}</td>
     <td>${oppCell(r)}</td>
     <td><span class="cls ${r.class}">${esc(label)}</span>
-      <button class="btn small ghost" style="margin-left:4px" data-track="${esc(r.id)}" title="Lưu lịch sử lượt bán và tự kiểm tra lại định kỳ">${isTracked(r.id) ? '★ Đang theo dõi' : '☆ Theo dõi'}</button>${r.uncertain ? ' <span class="tag ad" title="Một số kênh VN chính không trả lời — kết luận có thể sai">chưa chắc</span>' : ''}<ul class="imp-reasons">${r.reasons.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></td>
+      <button class="btn small ghost" style="margin-left:4px" data-track="${esc(r.id)}" title="Lưu lịch sử lượt bán và tự kiểm tra lại định kỳ">${isTracked(r.id) ? '★ Đang theo dõi' : '☆ Theo dõi'}</button>${r.uncertain ? ' <span class="tag ad" title="Một số kênh VN chính không trả lời — kết luận có thể sai">chưa chắc</span>' : ''}${r.pending?.length ? ` <span class="tag" title="Đang chờ: ${esc(r.pending.join(', '))}"><span class="loading-dots">đang bổ sung</span></span>` : ''}<ul class="imp-reasons">${r.reasons.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></td>
     <td class="small">${evidence}${matches}</td>
     <td class="c-price tnum">${p.priceVND ? fmtVND(p.priceVND) : '—'}<div class="muted small">VN: ${vn.minPriceVND ? fmtShortVND(vn.minPriceVND) + (vn.maxPriceVND > vn.minPriceVND ? `–${fmtShortVND(vn.maxPriceVND)}` : '') : '—'}</div></td>
   </tr>`;

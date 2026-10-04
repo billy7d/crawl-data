@@ -19,7 +19,8 @@ async function serper(endpoint, body, signal) {
 const locale = (market) => (MARKETS[market] ? { gl: market, hl: MARKETS[market].lang.split('-')[0] } : {});
 
 export async function serperWeb(q, market, signal) {
-  const d = await serper('search', { q, ...locale(market), num: 30 }, signal);
+  // Free accounts reject operator queries (site:, OR) with more than 10 results ("Query pattern not allowed").
+  const d = await serper('search', { q, ...locale(market), num: /\bsite:/.test(q) ? 10 : 30 }, signal);
   return (d.organic || []).map((r) => ({
     title: r.title,
     url: r.link,

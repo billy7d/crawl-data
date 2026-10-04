@@ -17,7 +17,8 @@ export default {
   kind: 'shop',
   group: 'Sàn TMĐT',
   markets: ['vn'],
-  limit: { concurrency: 2, gap: 400 },
+  // Requests start ≥400ms apart (polite when direct); 4 in flight because blocked requests go through the proxy (~4s each).
+  limit: { concurrency: 4, gap: 400 },
   async search({ q, signal }) {
     const d = await fetchJSON(`https://tiki.vn/api/v2/products?limit=40&include=advertisement&aggregations=2&q=${encodeURIComponent(q)}`, {
       signal, timeout: 7000, proxy: 'fallback',

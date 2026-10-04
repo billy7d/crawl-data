@@ -226,12 +226,28 @@ app.post('/api/import-check', async (req, res) => {
   line({ type: 'start', total: products.length });
   // Same-brand products next to each other so the brand-level search is reused from the run's cache.
   const ordered = [...products].sort((a, b) => fold(a.brand || '').localeCompare(fold(b.brand || '')));
-  await mapLimit(ordered, 3, async (p) => {
+  // Fast pass first (answers from sources that respond within seconds), then a complete pass for rows that
+  // were waiting on slow sources (Lazada via proxy…) or product pages; the client replaces the row by id.
+  // The complete pass starts after every row has its fast answer, so new work it adds (product-specific
+  // searches, product pages) doesn't slow the rows still waiting; slow requests already in flight carry on.
+  const completing = [];
+  await mapLimit(ordered, 6, async (p) => {
+    if (ac.signal.aborted) return;
+    try {
+      const r = await checkProduct(p, ctx, { fast: true });
+      line({ type: 'result', result: r });
+      if (r.pending.length) completing.push([p, r]);
+    } catch (e) {
+      line({ type: 'error', id: p.id, error: e.message });
+    }
+  });
+  line({ type: 'fast-done', ms: Date.now() - t0, completing: completing.length });
+  await mapLimit(completing, 6, async ([p, r]) => {
     if (ac.signal.aborted) return;
     try {
       line({ type: 'result', result: await checkProduct(p, ctx) });
-    } catch (e) {
-      line({ type: 'error', id: p.id, error: e.message });
+    } catch {
+      line({ type: 'result', result: { ...r, pending: [], reasons: r.reasons.filter((x) => !x.startsWith('Đang bổ sung')) } });
     }
   });
   line({ type: 'done', ms: Date.now() - t0, importers: [...ctx.importers.values()] });
