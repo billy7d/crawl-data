@@ -14,7 +14,12 @@ export const looksBlocked = (status, text) => [202, 403, 429, 503].includes(stat
 
 // SCRAPE_PROXY is a URL template with {url}, e.g. ScraperAPI: https://api.scraperapi.com/?api_key=KEY&url={url}
 export const proxyEnabled = () => !!process.env.SCRAPE_PROXY;
-const viaProxy = (url) => process.env.SCRAPE_PROXY.replace('{url}', encodeURIComponent(url));
+// proxyExtra: provider options for hard sites (e.g. ScraperAPI "&premium=true" for Lazada), inserted before url=.
+const viaProxy = (url, extra = '') => {
+  const tpl = process.env.SCRAPE_PROXY;
+  const t = extra && tpl.includes('scraperapi.com') ? tpl.replace('url={url}', `${extra.replace(/^&/, '')}&url={url}`) : tpl;
+  return t.replace('{url}', encodeURIComponent(url));
+};
 
 export class HttpError extends Error {
   constructor(message, status) {
@@ -69,10 +74,10 @@ export async function request(url, {
 }
 
 // proxy: 'fallback' retries through SCRAPE_PROXY when the site blocks us; 'always' goes through it directly.
-export async function fetchText(url, { proxy, ...opts } = {}) {
+export async function fetchText(url, { proxy, proxyExtra, ...opts } = {}) {
   const useProxy = proxy && proxyEnabled();
   const proxied = async () => {
-    const res = await request(viaProxy(url), { ...opts, timeout: 60000 }); // proxies render JS and retry: slow
+    const res = await request(viaProxy(url, proxyExtra), { ...opts, timeout: 70000 }); // proxies render JS and retry: slow
     return { text: await res.text(), url, status: res.status, proxied: true };
   };
   if (useProxy && proxy === 'always') return proxied();

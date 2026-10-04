@@ -28,7 +28,8 @@ export default {
   async search({ q, market, signal }) {
     const host = MARKETS[market].lazada;
     const url = `https://${host}/catalog/?ajax=true&page=1&q=${encodeURIComponent(q)}`;
-    const opts = { signal, timeout: 8000, headers: { Referer: `https://${host}/` }, proxy: 'fallback' };
+    // Lazada blocks ScraperAPI's normal pool; its premium pool works (costs more credits, used only on a block).
+    const opts = { signal, timeout: 8000, headers: { Referer: `https://${host}/` }, proxy: 'fallback', proxyExtra: '&premium=true' };
     let d = await fetchJSON(url, opts);
     // Lazada's captcha comes back as JSON ({ rgv587_flag, url: …punish… }), not as an HTML page.
     const blocked = (x) => x.rgv587_flag || x.url?.includes('punish');
@@ -53,7 +54,7 @@ export default {
   },
   async detail(item, { signal }) {
     const m = MARKETS[item.market] || MARKETS.vn;
-    const { text } = await fetchText(item.url, { signal, timeout: 10000, lang: `${m.mkt},${m.lang};q=0.9`, proxy: 'fallback' });
+    const { text } = await fetchText(item.url, { signal, timeout: 10000, lang: `${m.mkt},${m.lang};q=0.9`, proxy: 'fallback', proxyExtra: '&premium=true' });
     const desc = jsonString(text, 'desc');
     if (!desc) {
       if (/punish|captcha|_____tmd_____/i.test(text)) throw new HttpError('Lazada yêu cầu captcha (tạm thời)', 429);
