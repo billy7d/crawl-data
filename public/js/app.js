@@ -1259,6 +1259,10 @@ function importCandidates() {
   const seen = new Set();
   return list.filter((it) => {
     if (it.kind === 'web' || it.nonFood || it.market === 'vn' || it.country === 'vn') return false;
+    // Shop searches also return unrelated groceries (Marmite for "puffs"…): keep products made for babies.
+    const forBabies = it.ageMonths != null || it.source === 'off' // OFF hits are already limited to the baby-foods category
+      || /\b(baby|babies|infant|toddler|kids?|months?|stage [1-4]|bébé|kinder|beikost)\b|離乳|ベビー|아기|이유식|trẻ em|cho bé/i.test(it.title);
+    if (!forBabies) return false;
     const key = it.gtin || fold(`${it.brand || ''} ${it.title}`).replace(/\d+\s*(g|ml|oz)\b/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
     if (seen.has(key)) return false;
     seen.add(key);
@@ -1303,15 +1307,105 @@ async function runImportCheck() {
   } finally {
     if (S.imp.ctrl === ctrl) S.imp.running = false;
     renderImport();
+    renderImporterDirectory();
   }
 }
 const renderImportSoon = debounce(() => renderImport(), 150);
 
-const impScore = (r) => {
-  // Opportunity first (absent > brand > partial > nkcn), then demand abroad and in VN.
-  const order = { absent: 3, brand: 2, partial: 1, nkcn: 0 }[r.class];
-  return order * 1e9 + (r.product.reviews || 0) * 10 + (r.product.sold || 0) + (r.vn.sold || 0);
-};
+// ---- Opportunity score: transparent sum of demand signals × how open the Vietnamese market still is ----
+
+const CLASS_WEIGHT = { absent: 1, brand: 0.9, partial: 0.8, nkcn: 0.2 };
+const log10p = (n) => Math.log10(1 + (n || 0));
+
+// The same product sold elsewhere in the current results: how many countries and retailers carry it.
+function impBreadth(r) {
+  const p = r.product;
+  const brand = fold(p.brand || '');
+  if (!brand) return { markets: 1, retailers: 1 };
+  const t = nameTokens({ title: p.title, brand: p.brand });
+  const markets = new Set([p.country]);
+  const retailers = new Set([p.source]);
+  for (const it of allItems()) {
+    if (it.kind === 'web' || it.market === 'vn' || fold(it.brand || '') !== brand) continue;
+    if (similarity(t, nameTokens(it)) < 0.5) continue;
+    markets.add(it.country);
+    retailers.add(it.seller || it.source);
+  }
+  return { markets: markets.size, retailers: retailers.size };
+}
+
+function impOpportunity(r) {
+  if (r._opp) return r._opp;
+  const p = r.product;
+  const parts = [];
+  const add = (label, pts, detail) => {
+    if (pts > 0.4) parts.push([label, Math.round(pts), detail]);
+  };
+  add('Đánh giá ở nước ngoài', Math.min(30, 7.5 * log10p(p.reviews)), p.reviews ? `${fmtCompact(p.reviews)} đánh giá` : '');
+  add('Điểm sao', p.rating >= 4.5 ? 5 : p.rating >= 4 ? 3 : 0, p.rating ? `★ ${fmtNum(p.rating, 1)}` : '');
+  const b = impBreadth(r);
+  add('Độ phủ quốc tế', Math.min(15, 5 * (b.markets - 1) + 2 * (b.retailers - 1)), `${b.markets} nước, ${b.retailers} nhà bán trong kết quả`);
+  if (r.class !== 'nkcn') {
+    add('Nhu cầu tại VN (hàng xách tay/nhỏ lẻ)', Math.min(20, 5 * log10p(r.vn.sold) + 2 * Math.min(r.vn.listings, 5)), `${r.vn.listings} tin bán, ${fmtCompact(r.vn.sold || 0)} đã bán`);
+    add('Tốc độ bán tại VN', Math.min(10, (r.history?.soldPerWeek || 0) / 10), r.history?.soldPerWeek ? `~${fmtCompact(r.history.soldPerWeek)}/tuần` : '');
+  }
+  add('Người Việt tìm thương hiệu', Math.min(10, 2 * (r.interest?.suggestions || 0)), r.interest?.sample?.length ? `gợi ý: “${r.interest.sample.slice(0, 2).join('”, “')}”` : '');
+  if (p.priceVND && r.vn.minPriceVND && r.vn.minPriceVND > p.priceVND) {
+    const gap = (r.vn.minPriceVND - p.priceVND) / p.priceVND;
+    add('Giá VN cao hơn giá gốc', Math.min(10, gap * 20), `+${fmtNum(gap * 100)}% (${fmtShortVND(p.priceVND)} → ${fmtShortVND(r.vn.minPriceVND)})`);
+  }
+  const demand = Math.min(100, parts.reduce((s, x) => s + x[1], 0));
+  const weight = CLASS_WEIGHT[r.class] ?? 0.5;
+  r._opp = { score: Math.round(demand * weight), demand, weight, parts };
+  return r._opp;
+}
+
+const impScore = (r) => impOpportunity(r).score * 1e6 + (r.product.reviews || 0);
+
+function oppCell(r) {
+  const o = impOpportunity(r);
+  return `<div class="opp"><b class="opp-n">${o.score}</b><div class="opp-bar"><span style="width:${o.score}%"></span></div></div>
+    <details class="imp-matches"><summary>Vì sao?</summary>
+      <div class="small">${o.parts.map(([l, pts, d]) => `<div>+${pts} ${esc(l)}${d ? ` <span class="muted">(${esc(d)})</span>` : ''}</div>`).join('') || '<div class="muted">Chưa có tín hiệu nhu cầu</div>'}
+      <div class="muted">Nhu cầu ${o.demand}/100 × hệ số nhóm ${o.weight} = <b>${o.score}</b></div></div>
+    </details>`;
+}
+
+// Brands with the most room: not officially imported yet, ranked by their best product's score.
+function brandOpportunities(all) {
+  const by = new Map();
+  for (const r of all) {
+    const k = fold(r.product.brand || '').replace(/[^a-z0-9]/g, '') || '(không rõ hãng)';
+    const g = by.get(k) || { brand: r.product.brand || '(không rõ hãng)', items: [], best: 0, reviews: 0, classes: new Set(), importer: null };
+    g.items.push(r);
+    g.best = Math.max(g.best, impOpportunity(r).score);
+    g.reviews += r.product.reviews || 0;
+    g.classes.add(r.class);
+    g.importer ||= r.importers[0] || r.brandImporter || null;
+    by.set(k, g);
+  }
+  return [...by.values()].filter((g) => !g.classes.has('nkcn') || g.classes.size > 1).sort((a, b) => b.best - a.best).slice(0, 12);
+}
+
+async function renderImporterDirectory(q = $('#imp-dir-q')?.value || '') {
+  const box = $('#imp-importers');
+  if (!box) return;
+  let rows = [];
+  try {
+    rows = await api(`/api/importers?q=${encodeURIComponent(q)}`);
+  } catch { /* offline */ }
+  const focused = document.activeElement?.id === 'imp-dir-q';
+  box.innerHTML = `<div class="panel" style="margin-top:14px"><h3>Danh bạ nhà nhập khẩu / phân phối <span class="muted">tích lũy qua mọi lần phân tích · ${rows.length} mục</span></h3>
+    <input type="search" id="imp-dir-q" placeholder="Tìm thương hiệu hoặc công ty…" value="${esc(q)}" style="width:280px;margin-bottom:8px">
+    ${rows.length ? `<table class="simple"><thead><tr><th>Thương hiệu</th><th>Công ty</th><th>Thấy trên</th><th class="num">Số lần</th><th>Gần nhất</th></tr></thead><tbody>
+    ${rows.slice(0, 200).map((x) => `<tr><td><b>${esc(x.brand)}</b></td><td>${esc(x.importer)}</td><td>${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(S.srcName[x.source] || x.source || 'link')}</a>` : esc(x.source || '')}</td><td class="num">${x.seen}</td><td class="small muted">${timeAgo(x.lastSeen)}</td></tr>`).join('')}
+    </tbody></table>` : '<p class="muted small">Chưa có. Chạy phân tích để app đọc tên nhà nhập khẩu trên các trang bán tại VN.</p>'}</div>`;
+  if (focused) {
+    const el = $('#imp-dir-q');
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+  }
+}
 
 function renderImport() {
   const all = [...S.imp.results.values()];
@@ -1329,12 +1423,20 @@ function renderImport() {
     .map(([k, label]) => `<button type="button" class="chip" data-imp-filter="${k}" aria-pressed="${S.imp.filter === k}" title="${esc(IMP_CLASSES[k]?.[1] || '')}">${k ? `<span class="cls ${k}">●</span>` : ''}${esc(label)}</button>`).join('') : '';
   const rows = all.filter((r) => !S.imp.filter || r.class === S.imp.filter).sort((a, b) => impScore(b) - impScore(a));
   $('#imp-results').innerHTML = rows.length ? `<div class="table-wrap"><table class="results imp"><thead><tr>
-      <th class="c-img">Ảnh</th><th class="c-title">Sản phẩm (nước ngoài)</th><th>Kết luận tại VN</th><th>Bằng chứng tại VN</th><th class="c-price">Giá NN / VN</th>
+      <th class="c-img">Ảnh</th><th class="c-title">Sản phẩm (nước ngoài)</th><th style="width:150px">Điểm cơ hội</th><th>Kết luận tại VN</th><th>Bằng chứng tại VN</th><th class="c-price">Giá NN / VN</th>
     </tr></thead><tbody>${rows.map(impRow).join('')}</tbody></table></div>`
     : (S.imp.total && !S.imp.running ? '<div class="panel muted">Không có sản phẩm trong nhóm này.</div>' : '');
-  const imps = S.imp.importers;
-  $('#imp-importers').innerHTML = imps.length ? `<div class="panel" style="margin-top:14px"><h3>Nhà nhập khẩu / phân phối tìm thấy <span class="muted">theo thương hiệu</span></h3>
-    <table class="simple"><thead><tr><th>Thương hiệu</th><th>Công ty</th></tr></thead><tbody>${imps.map((x) => `<tr><td><b>${esc(x.brand)}</b></td><td>${esc(x.importer)}</td></tr>`).join('')}</tbody></table></div>` : '';
+  const open = all.filter((r) => r.class !== 'nkcn').sort((a, b) => impScore(b) - impScore(a));
+  const brands = brandOpportunities(all);
+  $('#imp-summary').innerHTML = !S.imp.filter && open.length ? `<div class="panels" style="margin:0 0 14px">
+    <div class="panel"><h3>Top cơ hội <span class="muted">điểm cao nhất, chưa NKCN</span></h3><div class="top-opps">${open.slice(0, 6).map((r) => `
+      <div class="top-opp">${img(r.product.image, 'mini-thumb')}<div><div class="p-title small">${esc(r.product.title)}</div>
+        <div class="small"><b>${impOpportunity(r).score}</b> điểm · <span class="cls ${r.class}">${esc(IMP_CLASSES[r.class][0])}</span></div></div></div>`).join('')}</div></div>
+    <div class="panel"><h3>Thương hiệu tiềm năng <span class="muted">chưa NKCN, xếp theo SP tốt nhất</span></h3>
+      <table class="simple"><thead><tr><th>Thương hiệu</th><th class="num">SP</th><th>Tình trạng tại VN</th><th class="num">Điểm</th></tr></thead><tbody>
+      ${brands.map((g) => `<tr><td><b>${esc(g.brand)}</b>${g.importer ? `<div class="small muted">NPP: ${esc(g.importer)}</div>` : ''}</td><td class="num">${g.items.length}</td>
+        <td>${[...g.classes].map((c) => `<span class="cls ${c}">${esc(IMP_CLASSES[c][0])}</span>`).join(' ')}</td><td class="num"><b>${g.best}</b></td></tr>`).join('')}
+      </tbody></table></div></div>` : '';
 }
 
 // ---- Tracked products: sales history and re-checks ----
@@ -1425,6 +1527,7 @@ function impRow(r) {
     <td class="c-title"><a class="p-title" href="${esc(p.url || '#')}" target="_blank" rel="noopener noreferrer">${esc(p.title)}</a>
       <div class="p-sub">${p.brand ? `<b>${esc(p.brand)}</b> · ` : ''}${flag(p.country)} ${esc(countryName(p.country))} · ${esc(S.srcName[p.source] || p.source)}</div>
       ${p.rating || p.reviews ? `<div class="rate"><span class="star">★</span> ${fmtNum(p.rating, 1)}${p.reviews ? ` (${fmtCompact(p.reviews)} đánh giá)` : ''}</div>` : ''}</td>
+    <td>${oppCell(r)}</td>
     <td><span class="cls ${r.class}">${esc(label)}</span>
       <button class="btn small ghost" style="margin-left:4px" data-track="${esc(r.id)}" title="Lưu lịch sử lượt bán và tự kiểm tra lại định kỳ">${isTracked(r.id) ? '★ Đang theo dõi' : '☆ Theo dõi'}</button>${r.uncertain ? ' <span class="tag ad" title="Một số kênh VN chính không trả lời — kết luận có thể sai">chưa chắc</span>' : ''}<ul class="imp-reasons">${r.reasons.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></td>
     <td class="small">${evidence}${matches}</td>
@@ -1435,8 +1538,8 @@ function impRow(r) {
 function exportImport() {
   const rows = [...S.imp.results.values()].sort((a, b) => impScore(b) - impScore(a));
   if (!rows.length) return toast('Chưa có kết quả để xuất.');
-  const head = ['Sản phẩm', 'Thương hiệu', 'Nước', 'Giá NN (VNĐ)', 'Đánh giá NN', 'Kết luận', 'Chưa chắc', 'Lý do', 'Số tin VN khớp', 'Chuỗi lớn', 'Nhà NK/PP', 'NPP của hãng', 'Đã bán VN', 'Tin xách tay', 'Giá VN thấp nhất', 'Link NN', 'Link VN'];
-  const data = rows.map((r) => [r.product.title, r.product.brand, countryName(r.product.country), r.product.priceVND, r.product.reviews, IMP_CLASSES[r.class][0], r.uncertain ? 'có' : '',
+  const head = ['Điểm cơ hội', 'Nhu cầu /100', 'Chi tiết điểm', 'Sản phẩm', 'Thương hiệu', 'Nước', 'Giá NN (VNĐ)', 'Đánh giá NN', 'Kết luận', 'Chưa chắc', 'Lý do', 'Số tin VN khớp', 'Chuỗi lớn', 'Nhà NK/PP', 'NPP của hãng', 'Đã bán VN', 'Tin xách tay', 'Giá VN thấp nhất', 'Link NN', 'Link VN'];
+  const data = rows.map((r) => [impOpportunity(r).score, impOpportunity(r).demand, impOpportunity(r).parts.map(([l, p]) => `${l} +${p}`).join('; '), r.product.title, r.product.brand, countryName(r.product.country), r.product.priceVND, r.product.reviews, IMP_CLASSES[r.class][0], r.uncertain ? 'có' : '',
     r.reasons.join(' | '), r.vn.listings, r.chains.join('; '), r.importers.join('; '), r.brandImporter, r.vn.sold, r.vn.handCarried, r.vn.minPriceVND, r.product.url,
     r.matches.slice(0, 5).map((m) => m.url).join(' ')]);
   download(`co-hoi-nhap-khau-${new Date().toISOString().slice(0, 10)}.csv`, toCSV([head, ...data]), 'text/csv;charset=utf-8');
@@ -1461,6 +1564,9 @@ function bindImport() {
       setTimeout(refreshTracked, 500);
     }
   });
+  $('#imp-importers').addEventListener('input', debounce((e) => {
+    if (e.target.id === 'imp-dir-q') renderImporterDirectory(e.target.value);
+  }, 300));
   $('#imp-filters').addEventListener('click', (e) => {
     const b = e.target.closest('[data-imp-filter]');
     if (!b) return;
@@ -1706,6 +1812,7 @@ function switchTab(tab) {
   if (tab === 'import') {
     renderImport();
     refreshTracked();
+    renderImporterDirectory();
   }
   if (tab === 'watch') renderWatch();
   if (tab === 'history') renderHistory();

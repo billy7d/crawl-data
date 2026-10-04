@@ -367,6 +367,12 @@ td.c-price, td.c-p100 { text-align: right; }
 
 /* ---------- import check ---------- */
 .chip.quick { border-style: dashed; }
+.opp { display: flex; align-items: center; gap: 8px; }
+.opp-n { font-size: 20px; font-variant-numeric: tabular-nums; min-width: 28px; }
+.opp-bar { flex: 1; min-width: 50px; height: 8px; background: var(--surface-3); border-radius: 0 4px 4px 0; }
+.opp-bar span { display: block; height: 100%; background: var(--series-1); border-radius: 0 4px 4px 0; }
+.top-opps { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+.top-opp { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; display: grid; grid-template-columns: 48px 1fr; gap: 8px; }
 .cls { display: inline-block; font-size: 12px; font-weight: 700; border-radius: 6px; padding: 2px 8px; white-space: nowrap; }
 .cls.absent { background: var(--good-wash); color: var(--good); }
 .cls.brand { background: var(--accent-wash); color: var(--accent-ink); }

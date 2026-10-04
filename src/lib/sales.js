@@ -17,6 +17,11 @@ db.exec(`
     key TEXT, t INTEGER, sold INTEGER, reviews INTEGER, rating REAL, price_vnd INTEGER
   );
   CREATE INDEX IF NOT EXISTS snapshots_key_t ON snapshots(key, t);
+  CREATE TABLE IF NOT EXISTS importers (
+    brand_key TEXT, brand TEXT, importer_key TEXT, importer TEXT, source TEXT, url TEXT,
+    first_seen INTEGER, last_seen INTEGER, seen INTEGER DEFAULT 1,
+    PRIMARY KEY (brand_key, importer_key)
+  );
   CREATE TABLE IF NOT EXISTS tracked (
     id TEXT PRIMARY KEY, product TEXT, added_at INTEGER, last_check INTEGER, last_class TEXT, last_result TEXT,
     class_history TEXT
@@ -104,6 +109,29 @@ export function productHistory(matches, days = 90) {
     snapshots: per.reduce((s, h) => s + h.points.length, 0),
   };
 }
+
+// ---------- Importer / distributor directory (accumulates across every check) ----------
+
+const squash = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd')
+  .replace(/\b(cong ty|cty|c ty|tnhh|co phan|ctcp|mtv|thuong mai|dich vu|xuat nhap khau|xnk|tm|dv|viet nam|vn)\b/g, ' ')
+  .replace(/[^a-z0-9]+/g, '');
+
+export function recordImporter(brand, importer, source = null, url = null, now = Date.now()) {
+  if (!brand || !importer) return;
+  db.prepare(`INSERT INTO importers (brand_key, brand, importer_key, importer, source, url, first_seen, last_seen, seen)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+    ON CONFLICT(brand_key, importer_key) DO UPDATE SET last_seen = excluded.last_seen, seen = seen + 1,
+      url = COALESCE(excluded.url, url), source = COALESCE(excluded.source, source)`)
+    .run(squash(brand), brand, squash(importer), importer, source, url, now, now);
+}
+
+export function listImporters(q = '') {
+  const rows = db.prepare('SELECT brand, importer, source, url, first_seen AS firstSeen, last_seen AS lastSeen, seen FROM importers ORDER BY brand, seen DESC').all();
+  const f = squash(q);
+  return f ? rows.filter((r) => squash(r.brand).includes(f) || squash(r.importer).includes(f)) : rows;
+}
+
+export const knownImporter = (brand) => db.prepare('SELECT importer FROM importers WHERE brand_key = ? ORDER BY seen DESC LIMIT 1').get(squash(brand))?.importer || null;
 
 // ---------- Tracked products ----------
 

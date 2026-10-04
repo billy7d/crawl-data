@@ -12,7 +12,8 @@ import { canEnrich, getDetail, gtinOf } from './enrich.js';
 import { translate } from './translate.js';
 import { clean, fold, guessBrand, parseQuantity } from './normalize.js';
 import { hostOf } from './markets.js';
-import { recordListings, productHistory, listingHistory } from './sales.js';
+import { recordListings, productHistory, listingHistory, recordImporter, knownImporter } from './sales.js';
+import { suggest } from './suggest.js';
 
 // Vietnamese listing sources, in the order evidence is most trustworthy.
 const VN_SOURCES = ['concung', 'kidsplaza', 'tiki', 'lazada', 'siteshop', 'gshop'];
@@ -202,17 +203,48 @@ function brandImporter(brand, brandHits, ctx) {
     ctx.brandImporter.set(key, (async () => {
       const known = ctx.importers.get(key)?.importer;
       if (known) return known;
+      // Seen on an earlier run (persisted directory).
+      const saved = knownImporter(brand);
+      if (saved) return saved;
       const picks = [...brandHits]
         .sort((a, b) => IMPORTER_SOURCES.indexOf(a.source) - IMPORTER_SOURCES.indexOf(b.source))
         .slice(0, 5);
       for (const l of picks) {
         const d = await withDetails(l, ctx);
-        if (d.importer) return d.importer;
+        if (d.importer) {
+          try {
+            recordImporter(brand, d.importer, d.source, d.url);
+          } catch { /* best-effort */ }
+          return d.importer;
+        }
       }
       return null;
     })());
   }
   return ctx.brandImporter.get(key);
+}
+
+// How much Vietnamese shoppers search for the brand: autocomplete suggestions (Google + DDG, vi-VN)
+// that contain the brand name. A cheap proxy for awareness/demand in Vietnam.
+function brandInterest(brand, ctx) {
+  const key = fold(brand);
+  if (!ctx.interest) ctx.interest = new Map();
+  if (!ctx.interest.has(key)) {
+    // Only baby-context suggestions count: "gerber accumark" (sewing software) says nothing about baby food.
+    const BABY = /an dam|cho be|\bbe\b|tre em|so sinh|sua|bot|banh|chao|puffs?|baby|thang tuoi|hop|goi/;
+    ctx.interest.set(key, Promise.all([suggest(brand), suggest(`${brand} cho bé`)]).then(([a, b2]) => {
+      const b = key.replace(/[^a-z0-9]/g, '');
+      const seen = new Set();
+      const hits = [...a, ...b2].filter((x) => {
+        const f = fold(x);
+        if (seen.has(f) || !f.replace(/[^a-z0-9]/g, '').includes(b) || !BABY.test(f)) return false;
+        seen.add(f);
+        return true;
+      });
+      return { suggestions: hits.length, sample: hits.slice(0, 5) };
+    }).catch(() => null));
+  }
+  return ctx.interest.get(key);
 }
 
 export async function checkProduct(p, ctx) {
@@ -247,6 +279,13 @@ export async function checkProduct(p, ctx) {
   const importers = [...new Set(matches.map((x) => x.l.importer).filter(Boolean))];
   // Brand-level importer seen on other products of the same brand (useful for the "brand" class).
   for (const imp of importers) if (id.brand) ctx.importers.set(fold(id.brand), { brand: id.brand, importer: imp });
+  for (const x of matches) {
+    if (x.l.importer && id.brand) {
+      try {
+        recordImporter(id.brand, x.l.importer, x.l.source, x.l.url);
+      } catch { /* best-effort */ }
+    }
+  }
   const handCarried = matches.filter((x) => HAND_CARRIED.test(x.l.title)).length;
   const sold = matches.reduce((s, x) => s + (x.l.sold || 0), 0);
   const prices = matches.map((x) => x.l.priceVND).filter(Boolean).sort((a, b) => a - b);
@@ -292,6 +331,7 @@ export async function checkProduct(p, ctx) {
     recordListings(matches.map((x) => ({ ...x.l, chain: chainOf(x.l) })));
   } catch { /* history is best-effort */ }
   const history = strongListings.length ? productHistory(strongListings) : null;
+  const interest = id.brand ? await brandInterest(id.brand, ctx) : null;
   if (history?.soldPerWeek) reasons.push(`Tốc độ bán tại VN: ~${history.soldPerWeek}/tuần (theo dõi ${history.trackedDays} ngày)`);
 
   return {
@@ -316,6 +356,7 @@ export async function checkProduct(p, ctx) {
       official: strong.filter((x) => officialStore(x.l)).length,
     },
     history,
+    interest,
     matches: matches.map(({ l, score }) => ({
       title: l.title, url: l.url, image: l.image, source: l.source, seller: l.seller, domain: l.domain, priceVND: l.priceVND,
       sold: l.sold, rating: l.rating, reviews: l.reviews, importer: l.importer || null, chain: chainOf(l), official: officialStore(l),

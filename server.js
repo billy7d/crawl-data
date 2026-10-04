@@ -16,7 +16,7 @@ import { clean, fold } from './src/lib/normalize.js';
 import { CooldownError } from './src/lib/limiter.js';
 import { runSearch } from './src/lib/run.js';
 import { checkProduct, createContext } from './src/lib/importcheck.js';
-import { recordListings, listTracked, dueTracked, track, untrack, saveCheck, stats as salesStats } from './src/lib/sales.js';
+import { recordListings, listTracked, dueTracked, track, untrack, saveCheck, stats as salesStats, listImporters } from './src/lib/sales.js';
 import { readSettings, validate, applySettings, testSetting, PROXY_PROVIDERS } from './src/lib/settings.js';
 
 try {
@@ -444,6 +444,8 @@ async function runRecheck(ids = null) {
     recheck.finishedAt = Date.now();
   }
 }
+
+app.get('/api/importers', (req, res) => res.json(listImporters(String(req.query.q || '').slice(0, 100))));
 
 app.get('/api/sales/tracked', (req, res) => res.json({ tracked: listTracked(), recheck, stats: salesStats(), everyHours: SALES_CHECK_HOURS() }));
 
