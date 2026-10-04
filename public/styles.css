@@ -320,7 +320,11 @@ td.c-price, td.c-p100 { text-align: right; }
 .src-badge { font-size: 12px; font-weight: 600; color: var(--text-2); }
 .info { font-size: 12px; color: var(--text-2); display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 .info b { color: var(--text); font-weight: 600; }
+.info:has(.info-row) { display: block; -webkit-line-clamp: unset; }
+.info-row { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.info-row + .info-row { margin-top: 3px; }
 .loading-dots::after { content: '…'; animation: pulse 1s infinite; }
+.src-note { font-size: 11px; font-weight: 400; color: var(--muted); }
 .act { display: flex; gap: 2px; }
 .rate { font-size: 12px; color: var(--text-2); }
 .rate .star { color: #e2a500; }
@@ -360,6 +364,19 @@ td.c-price, td.c-p100 { text-align: right; }
 .nutri { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 6px; color: #fff; font-weight: 800; }
 .nutri.A { background: #038141; } .nutri.B { background: #85bb2f; } .nutri.C { background: #e6a700; }
 .nutri.D { background: #ee8100; } .nutri.E { background: #e63e11; }
+
+/* ---------- import check ---------- */
+.chip.quick { border-style: dashed; }
+.cls { display: inline-block; font-size: 12px; font-weight: 700; border-radius: 6px; padding: 2px 8px; white-space: nowrap; }
+.cls.absent { background: var(--good-wash); color: var(--good); }
+.cls.brand { background: var(--accent-wash); color: var(--accent-ink); }
+.cls.partial { background: var(--warn-wash); color: var(--warn); }
+.cls.nkcn { background: var(--surface-3); color: var(--text-2); }
+.imp-reasons { margin: 4px 0 0; padding-left: 16px; font-size: 12px; color: var(--text-2); }
+.imp-matches { margin-top: 6px; font-size: 12px; }
+.imp-matches summary { cursor: pointer; color: var(--accent); }
+.imp-match { display: grid; grid-template-columns: 40px 1fr auto; gap: 8px; align-items: center; padding: 4px 0; border-top: 1px solid var(--border); }
+table.imp td { vertical-align: top; }
 
 /* ---------- settings modal ---------- */
 .modal { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; padding: 16px; }

@@ -5,15 +5,17 @@ import compression from 'compression';
 import { SOURCES, byId, supports, enabled, describe } from './src/sources/index.js';
 import { MARKETS, COUNTRY_NAMES } from './src/lib/markets.js';
 import { makeItem, mergeDetail } from './src/lib/item.js';
-import { remember, del, sweep, clearAll } from './src/lib/cache.js';
+import { del, sweep, clearAll } from './src/lib/cache.js';
 import { loadRates, rates, toVND } from './src/lib/currency.js';
 import { translate, translateQuery } from './src/lib/translate.js';
 import { canEnrich, getDetail, isPublicHttpUrl } from './src/lib/enrich.js';
 import { suggest, keywordResearch } from './src/lib/suggest.js';
 import { jsonStore } from './src/lib/store.js';
 import { request, mapLimit } from './src/lib/http.js';
-import { clean } from './src/lib/normalize.js';
-import { throttled, CooldownError } from './src/lib/limiter.js';
+import { clean, fold } from './src/lib/normalize.js';
+import { CooldownError } from './src/lib/limiter.js';
+import { runSearch } from './src/lib/run.js';
+import { checkProduct, createContext } from './src/lib/importcheck.js';
 import { readSettings, validate, applySettings, testSetting, PROXY_PROVIDERS } from './src/lib/settings.js';
 
 try {
@@ -21,12 +23,15 @@ try {
 } catch { /* no .env file */ }
 
 const PORT = Number(process.env.PORT) || 3000;
-// Read on every search so a change from the settings panel applies without a restart.
-const searchTtl = () => Number(process.env.SEARCH_CACHE_HOURS || 6) * 3600e3;
-const ENRICH_CONCURRENCY = 8;
-const SESSION_DEADLINE_MS = 30000;
+const ENRICH_CONCURRENCY = 10;
+const SESSION_DEADLINE_MS = 45000;
 // How many top rows per source get their product page fetched for details.
-const ENRICH_PLAN = { tiki: 12, concung: 6, kidsplaza: 6, rakuten: 4, off: 8, google: 7, searxng: 7, brave: 7, bing: 7, ddg: 7, siteshop: 8, tesco: 4 };
+// The browser asks for the rest of the visible rows afterwards (/api/details), so these only need to cover
+// the first screen. Per-host throttles keep each shop at a polite rate.
+const ENRICH_PLAN = {
+  tiki: 20, lazada: 6, concung: 12, kidsplaza: 12, rakuten: 8, off: 8, amazon: 4, target: 12, tesco: 6, sainsburys: 12,
+  waitrose: 12, morrisons: 12, woolworths: 16, dm: 16, siteshop: 8, google: 6, searxng: 6, brave: 6, bing: 6, ddg: 6,
+};
 
 const history = jsonStore('history.json', []);
 const watch = jsonStore('watchlist.json', []);
@@ -154,12 +159,7 @@ app.get('/api/search', async (req, res) => {
     const ctx = { market: t.market, queries: [...new Set([q, query])] };
     send('task', { source: t.src.id, market: t.market, status: 'running', query });
     try {
-      const key = `s:v1:${t.src.id}:${t.market}:${query.toLowerCase()}`;
-      if (fresh) del(key);
-      const lim = t.src.limit || {};
-      const { value: raw, cached } = await remember(key, searchTtl(), () => throttled(lim.perMarket ? `${t.src.id}:${t.market}` : lim.key || t.src.id, lim, () => t.src.search({
-        q: query, market: t.market === 'world' ? 'us' : t.market, signal: ac.signal,
-      })));
+      const { value: raw, cached, key } = await runSearch(t.src, t.market, query, { signal: ac.signal, fresh });
       const out = [];
       let irrelevant = 0;
       // A shop's own search engine already judged its top hits relevant, even when the title lacks our words.
@@ -206,6 +206,45 @@ app.get('/api/search', async (req, res) => {
 });
 
 // ---------------- Product detail / translate ----------------
+
+// Official-import check: streams one NDJSON line per product as soon as it is classified.
+app.post('/api/import-check', async (req, res) => {
+  const products = (Array.isArray(req.body?.items) ? req.body.items : []).filter((p) => p?.title).slice(0, 80);
+  res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', 'X-Accel-Buffering': 'no' });
+  const ac = new AbortController();
+  res.on('close', () => ac.abort());
+  const line = (o) => !res.writableEnded && res.write(JSON.stringify(o) + '\n');
+  const ctx = createContext(ac.signal);
+  const t0 = Date.now();
+  line({ type: 'start', total: products.length });
+  // Same-brand products next to each other so the brand-level search is reused from the run's cache.
+  const ordered = [...products].sort((a, b) => fold(a.brand || '').localeCompare(fold(b.brand || '')));
+  await mapLimit(ordered, 3, async (p) => {
+    if (ac.signal.aborted) return;
+    try {
+      line({ type: 'result', result: await checkProduct(p, ctx) });
+    } catch (e) {
+      line({ type: 'error', id: p.id, error: e.message });
+    }
+  });
+  line({ type: 'done', ms: Date.now() - t0, importers: [...ctx.importers.values()] });
+  res.end();
+});
+
+// Batch details for the rows the user is looking at (ingredients, storage…), up to 12 per call.
+app.post('/api/details', async (req, res) => {
+  const items = (Array.isArray(req.body?.items) ? req.body.items : []).slice(0, 12).filter((i) => i?.source);
+  const out = await mapLimit(items, 6, async (item) => {
+    const src = byId[item.source];
+    if (!canEnrich(item, src) || (item.url && !isPublicHttpUrl(item.url))) return { ...item, enrichTried: true };
+    try {
+      return mergeDetail(item, await getDetail(item, src), { market: item.market });
+    } catch {
+      return { ...item, enrichTried: true, enrichFailed: true };
+    }
+  });
+  res.json({ items: out.map((r, i) => (r?.error ? { ...items[i], enrichTried: true } : r)) });
+});
 
 app.post('/api/detail', async (req, res) => {
   const item = req.body?.item;

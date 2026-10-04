@@ -1,6 +1,6 @@
 import { fetchJSON } from '../lib/http.js';
 import { clean, truncate } from '../lib/normalize.js';
-import { extractSections } from '../lib/extract.js';
+import { sectionsFromText, findImporter } from '../lib/extract.js';
 
 const SPEC_MAP = {
   ingredients_mb: 'ingredients', ingredients: 'ingredients', origin: 'origin', expiry_time: 'expiry',
@@ -17,10 +17,10 @@ export default {
   kind: 'shop',
   group: 'Sàn TMĐT',
   markets: ['vn'],
-  limit: { concurrency: 3, gap: 150 },
+  limit: { concurrency: 2, gap: 400 },
   async search({ q, signal }) {
     const d = await fetchJSON(`https://tiki.vn/api/v2/products?limit=40&include=advertisement&aggregations=2&q=${encodeURIComponent(q)}`, {
-      signal, timeout: 7000,
+      signal, timeout: 7000, proxy: 'fallback',
     });
     return (d.data || []).map((p) => ({
       title: p.name,
@@ -35,17 +35,19 @@ export default {
       reviews: p.review_count || null,
       sold: p.quantity_sold?.value ?? null,
       origin: p.origin || null,
+      gtin: /^\d{8,14}$/.test(p.sku || '') ? p.sku : null,
       extra: { tikiId: p.id, spid: p.seller_product_id, official: !!p.is_from_official_store },
     }));
   },
   // Structured details (specs + description) straight from Tiki's product API.
+  detailNeeds: (item) => item.extra?.tikiId,
   async detail(item, { signal }) {
     const id = item.extra?.tikiId;
     if (!id) return null;
     const spid = item.extra?.spid ? `?spid=${item.extra.spid}` : '';
-    const d = await fetchJSON(`https://tiki.vn/api/v2/products/${id}${spid}`, { signal, timeout: 7000 });
+    const d = await fetchJSON(`https://tiki.vn/api/v2/products/${id}${spid}`, { signal, timeout: 7000, proxy: 'fallback' });
     const desc = stripHtml(d.description);
-    const sections = extractSections(desc);
+    const sections = sectionsFromText(d.description);
     for (const group of d.specifications || []) {
       for (const a of group.attributes || []) {
         const key = SPEC_MAP[a.code];
@@ -55,7 +57,9 @@ export default {
         }
       }
     }
+    const specText = (d.specifications || []).flatMap((g) => g.attributes || []).map((a) => `${a.name}: ${stripHtml(a.value)}`).join('\n');
     return {
+      importer: findImporter(`${specText}\n${desc}`),
       price: d.price ?? null,
       currency: 'VND',
       description: truncate(d.short_description || desc, 600),

@@ -1,7 +1,7 @@
 // Generic HTML extractors: schema.org JSON-LD, OpenGraph, product cards on listing pages,
 // and labelled sections (ingredients, storage, usage, age...) on product pages.
 import * as cheerio from 'cheerio';
-import { clean, parsePrice, truncate } from './normalize.js';
+import { clean, fold, parsePrice, truncate } from './normalize.js';
 
 const abs = (u, base) => {
   if (!u) return null;
@@ -362,7 +362,27 @@ const HEADING_KW = {
   origin: /xuất xứ|sản xuất tại|made in|country of origin/i,
   nutrition: /giá trị dinh dưỡng|thông tin dinh dưỡng|nutrition(?:al)? (?:information|facts)|nährwerte/i,
 };
-const cutTail = (s) => s.split(/\s*(?:>>>|>>|Xem thêm|Xem chi tiết|Xem tất cả|Đọc thêm|Read more|Mua ngay)\b/i)[0];
+// Shop boilerplate that often follows the real content.
+const cutTail = (s) => s.split(/\s*(?:>>>|>>|Xem thêm|Xem chi tiết|Xem tất cả|Đọc thêm|Read more|Mua ngay|Giá sản phẩm trên Tiki|Giá sản phẩm đã bao gồm|Bên cạnh đó, tuỳ vào loại sản phẩm|Sản phẩm được phân phối bởi)\b/i)[0];
+
+// HTML fragment -> text that keeps block boundaries as newlines.
+export function textFromHtml(html) {
+  return String(html ?? '')
+    .replace(/<br\s*\/?>|<\/(p|div|li|h\d|tr|ul|ol|table)>/gi, '\n')
+    .replace(/<li[^>]*>/gi, '\n• ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#0?39;|&apos;/g, "'").replace(/&#(\d+);/g, (_, n) => String.fromCharCode(n))
+    .replace(/[ \t ]+/g, ' ')
+    .replace(/ *\n[ \n]*/g, '\n')
+    .trim();
+}
+
+// Descriptions stored as plain text with the markup stripped glue headings to content
+// ("…cho béHướng dẫn sử dụngChế biến…"); split where a lowercase letter runs into a capitalised word.
+export const unglue = (s) => String(s ?? '').replace(/(\p{Ll}|[0-9%)])(\p{Lu}\p{Ll})/gu, '$1\n$2');
+
+export const sectionsFromText = (raw) => extractSections(unglue(textFromHtml(raw)));
 
 function headingSections(text, found) {
   const lines = text.split('\n');
@@ -416,6 +436,94 @@ export function extractSections(text) {
   return found;
 }
 
+// ---------- Importer / distributor (Vietnamese labels) ----------
+
+const IMPORTER_RE = /(?:nhà nhập khẩu|đơn vị nhập khẩu|thương nhân nhập khẩu|nhập khẩu\s*(?:và|&)\s*phân phối(?:\s*bởi)?|nhập khẩu bởi|nk\s*(?:&|và)\s*pp|nhà phân phối(?:\s*độc quyền)?|phân phối(?:\s*độc quyền)?\s*bởi|đơn vị phân phối|chịu trách nhiệm (?:về )?(?:chất lượng )?(?:hàng hóa|sản phẩm))(?:[^\n:：]{0,45}[:：]|\s*bởi)?\s*[\-–]?\s*((?:công ty|cty|c\.ty|ctcp|tnhh)[^\n;•]{4,110})/iu;
+
+// "Công ty TNHH ABC - Địa chỉ: …" -> "Công ty TNHH ABC"
+export function findImporter(text) {
+  const m = String(text || '').match(IMPORTER_RE);
+  if (!m) return null;
+  const name = clean(m[1].split(/\s*(?:[-–(,|]|\.\s|địa chỉ|đ\/c|đc:|mst|mã số|số đt|điện thoại|hotline|website|tel|sđt|trụ sở)/i)[0]).replace(/[.\s]+$/, '');
+  return name.length >= 8 && name.length <= 100 ? name : null;
+}
+
+// ---------- Structured sections: embedded JSON and FAQ answers ----------
+
+// Map a JSON key or a section title ("storageInstruction", "Zutaten", "ingredients") to a section kind.
+function jsonLabelKind(label) {
+  const k = fold(label).replace(/[^a-z0-9぀-ヿ一-鿿]/g, '');
+  if (!k || k.length > 40 || /(note|notes|title|label|header|heading|link|url|icon|count|flag|bold|id|type|placeholder|button)$/.test(k)) return null;
+  if (k.startsWith('ingredients') || /^(ingredient|ingredienttext|ingredientstatement|ingredientlist|zutaten|zutatenliste|thanhphan|thanhphanchinh|原材料名?)$/.test(k)) return 'ingredients';
+  if (k.startsWith('storage') || /^(aufbewahrung|aufbewahrungshinweise|conservation|conservationconditions|baoquan|huongdanbaoquan|保存方法)$/.test(k)) return 'storage';
+  if (/^(preparation|preparationinstructions?|preparationandusage|directions?|directionsforuse|usage|usageinstructions?|howtouse|instructionsforuse|cookingguidelines|cookinginstructions|zubereitung|verwendungshinweise|huongdansudung|cachdung|cachsudung)$/.test(k)) return 'usage';
+  if (/^(allerg(y|en|ens)(advice|statement|information|info)?|allergene|allergenmaybepresent|allergystatement)$/.test(k)) return 'warnings';
+  if (/^(countryoforigin|herkunftsland|xuatxu)$/.test(k)) return 'origin';
+  return null;
+}
+
+const SKIP_STRING_KEYS = /^(type|id|url|href|link|icon|class|className|style|image|src|alt|key|code)$/i;
+export function flattenStrings(v, out = []) {
+  if (typeof v === 'string') out.push(v);
+  else if (Array.isArray(v)) v.forEach((x) => flattenStrings(x, out));
+  else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) if (!SKIP_STRING_KEYS.test(k)) flattenStrings(x, out);
+  return out;
+}
+
+// i18n dictionaries are full of "Ingredients" labels that aren't product data.
+const UI_PATH = /(^|\.)(locale|strings|i18n|translations?|messages|dictionary|labels|copy|seo|navigation|menu|footer)(\.|$)/i;
+
+export function sectionsFromJson($) {
+  const found = {};
+  const put = (kind, raw) => {
+    if (!kind || found[kind]) return;
+    const v = clean(cutTail(textFromHtml(Array.isArray(raw) ? flattenStrings(raw).join(', ') : raw)));
+    if (v.length < 8 || /\{\w+\}/.test(v) || /^(true|false|null|n\/a|none|tham khảo mô tả)$/i.test(v)) return;
+    found[kind] = truncate(v, MAX_LEN[kind]);
+  };
+  const stack = jsonBlobs($).map((b) => [b, '', 0]);
+  let visited = 0;
+  while (stack.length && visited++ < 300000) {
+    const [o, path, d] = stack.pop();
+    if (!o || typeof o !== 'object' || d > 40 || UI_PATH.test(path)) continue;
+    if (Array.isArray(o)) {
+      for (const v of o) if (v && typeof v === 'object') stack.push([v, path, d + 1]);
+      continue;
+    }
+    // { title: "storage", content: "Once opened, refrigerate…" } style pairs
+    const label = [o.title, o.name, o.label, o.header, o.heading, o.key].find((x) => typeof x === 'string');
+    const body = o.content ?? o.value ?? o.text ?? o.body ?? o.contentBlock ?? o.description;
+    if (label && body != null) put(jsonLabelKind(label), typeof body === 'object' ? flattenStrings(body).join(' ') : body);
+    for (const [k, v] of Object.entries(o)) {
+      if (typeof v === 'string' || (Array.isArray(v) && v.length && v.every((x) => typeof x === 'string'))) put(jsonLabelKind(k), v);
+      else if (v && typeof v === 'object') stack.push([v, `${path}.${k}`, d + 1]);
+    }
+  }
+  return found;
+}
+
+// Store FAQ (schema.org FAQPage) answers often state ingredients/usage when the description doesn't.
+export function sectionsFromFaq($) {
+  const found = {};
+  const questions = jsonLdObjects($).filter((o) => isType(o, 'Question') && o.acceptedAnswer);
+  for (const q of questions) {
+    const raw = textFromHtml([].concat(q.acceptedAnswer).map((a) => a.text || '').join('\n'));
+    const answer = raw
+      .replace(/^(dạ[,\s]*)?(chào\s+(ba mẹ|bố mẹ|ba|bố|mẹ|anh chị|anh|chị|bạn)(\s+(ơi|ạ))?[,.!\s]*)?(dạ[,\s]*)?/i, '')
+      .replace(/\s*(con cưng|shop|kids ?plaza)?\s*(xin\s+)?(cảm|cám) ơn[^.]*\.?\s*$/i, '');
+    if (!found.ingredients) {
+      const m = answer.match(/thành phần(?:\s+(?:gồm|từ|chính|bao gồm|như sau|có))*\s*(?:là|:)?\s*([\s\S]{15,})/i);
+      if (m) found.ingredients = truncate(clean(m[1]), MAX_LEN.ingredients);
+    }
+    if (!found.storage) {
+      const m = answer.match(/((?:bảo quản|đậy kín|sau khi (?:mở|pha))[\s\S]{10,})/i);
+      if (m && !/không (?:chứa |có )?(?:chất )?bảo quản/i.test(m[1].slice(0, 30))) found.storage = truncate(clean(m[1]), MAX_LEN.storage);
+    }
+    for (const [k, v] of Object.entries(extractSections(unglue(answer)))) if (!found[k] && k !== 'warnings') found[k] = v;
+  }
+  return found;
+}
+
 export function extractDetail(html, url) {
   const $ = cheerio.load(html);
   const meta = (sel) => clean($(sel).attr('content')) || null;
@@ -454,8 +562,11 @@ export function extractDetail(html, url) {
   const title = p.title || meta('meta[property="og:title"]') || clean($('h1').first().text()) || clean($('title').text());
   const image = p.image || abs(meta('meta[property="og:image"]') || meta('meta[name="twitter:image"]'), url);
   const description = p.description || meta('meta[property="og:description"]') || meta('meta[name="description"]');
+  // Structured data first (pageText() strips the <script> tags they live in). Precedence: JSON > page text > FAQ.
+  const fromJson = sectionsFromJson($);
+  const fromFaq = sectionsFromFaq($);
   const text = pageText($);
-  const sections = extractSections(text);
+  const sections = { ...fromFaq, ...extractSections(text), ...fromJson };
   if (!sections.origin && p.origin) sections.origin = p.origin;
 
   return {
@@ -470,6 +581,7 @@ export function extractDetail(html, url) {
     reviews: p.reviews ?? null,
     gtin: p.gtin || null,
     sections,
+    importer: findImporter(text),
     textSample: truncate(text, 1500),
   };
 }

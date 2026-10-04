@@ -14,7 +14,7 @@ const SECTION_LABELS = {
   expiry: 'Hạn sử dụng', weight: 'Khối lượng', nutrition: 'Dinh dưỡng', warnings: 'Lưu ý',
 };
 const STATUS = { research: 'Đang nghiên cứu', contact: 'Liên hệ NCC', sample: 'Đặt mẫu', imported: 'Đã nhập hàng', dropped: 'Loại bỏ' };
-const NO_DETAIL = new Set(['lazada', 'bingshop', 'gshop']);
+const NO_DETAIL = new Set(['bingshop', 'gshop', 'sainsburys']);
 const DEFAULT_MARKETS = ['vn'];
 const PAGE = 120;
 
@@ -60,6 +60,12 @@ const S = {
   watch: [],
   tab: 'results',
   detailLoading: new Set(),
+  borrow: new Map(),
+  enrichQueue: [],
+  enrichInflight: 0,
+  enrichInflightIds: new Set(),
+  enrichAttempted: new Set(),
+  runId: 0,
 };
 
 // ---------------------------------------------------------------- helpers
@@ -97,20 +103,144 @@ document.addEventListener('error', (e) => {
 const allItems = () => S.order.map((id) => S.items.get(id));
 const priceOf = (it) => it.priceVND;
 
-function infoLine(it) {
-  const s = it.sections || {};
-  const parts = [];
-  if (s.ingredients) parts.push(`<b>Thành phần:</b> ${esc(s.ingredients)}`);
-  if (s.age) parts.push(`<b>Độ tuổi:</b> ${esc(s.age)}`);
-  if (s.storage) parts.push(`<b>Bảo quản:</b> ${esc(s.storage)}`);
-  if (s.usage && parts.length < 3) parts.push(`<b>Cách dùng:</b> ${esc(s.usage)}`);
-  if (s.origin) parts.push(`<b>Xuất xứ:</b> ${esc(s.origin)}`);
-  if (!parts.length) {
-    const d = it.description || it.snippet;
-    if (d) parts.push(esc(d));
+// ---- Ingredients & storage: own data, data borrowed from the same product elsewhere, lazy loading ----
+
+const NAME_STOP = new Set(['cho', 'be', 'tre', 'em', 'hop', 'goi', 'tui', 'lon', 'chai', 'combo', 'loc', 'set', 'vi', 'huong', 'loai',
+  'the', 'and', 'with', 'for', 'of', 'pack', 'baby', 'babies', 'months', 'month', 'thang', 'tuoi', 'nam', 'chinh', 'hang', 'nhap', 'khau']);
+const tokenCache = new Map();
+function nameTokens(it) {
+  const key = `${it.title}|${it.brand || ''}`;
+  if (tokenCache.has(key)) return tokenCache.get(key);
+  const brand = fold(it.brand || '');
+  const words = fold(it.title)
+    .replace(/\d+(?:[.,]\d+)?\s*(?:g|gr|gram|ml|kg|l|oz|m|thang|tuoi|x)\b/g, ' ')
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w.length > 1 && !NAME_STOP.has(w) && !/^\d+$/.test(w) && !brand.split(/\s+/).includes(w));
+  const v = { set: new Set(words), brand };
+  tokenCache.set(key, v);
+  return v;
+}
+function similarity(a, b) {
+  if (a.brand && b.brand && a.brand !== b.brand) return 0;
+  let inter = 0;
+  for (const w of a.set) if (b.set.has(w)) inter++;
+  const union = a.set.size + b.set.size - inter;
+  return union ? inter / union : 0;
+}
+
+// For rows missing ingredients/storage, borrow them from the same product found in another source:
+// identical barcode first, otherwise same brand + near-identical name. Recomputed on each render.
+function computeBorrow() {
+  S.borrow = new Map();
+  const items = allItems().filter((i) => i.kind !== 'web');
+  const donors = items.filter((i) => i.sections?.ingredients || i.sections?.storage);
+  if (!donors.length) return;
+  const byGtin = new Map(donors.filter((d) => d.gtin).map((d) => [String(d.gtin).replace(/^0+/, ''), d]));
+  for (const it of items) {
+    const need = ['ingredients', 'storage'].filter((k) => !it.sections?.[k]);
+    if (!need.length) continue;
+    const t = nameTokens(it);
+    const ranked = [];
+    const sameCode = it.gtin && byGtin.get(String(it.gtin).replace(/^0+/, ''));
+    if (sameCode && sameCode.id !== it.id) ranked.push([2, sameCode]);
+    if (t.set.size >= 2) {
+      for (const d of donors) {
+        if (d.id === it.id) continue;
+        const sim = similarity(t, nameTokens(d));
+        if (sim >= 0.6) ranked.push([sim, d]);
+      }
+    }
+    ranked.sort((a, b) => b[0] - a[0]);
+    const b = {};
+    for (const k of need) {
+      const hit = ranked.find(([, d]) => d.sections?.[k]);
+      if (hit) b[k] = { text: hit[1].sections[k], from: S.srcName[hit[1].source] || hit[1].source, donorId: hit[1].id, donorTitle: hit[1].title, sameCode: hit[0] === 2 };
+    }
+    if (Object.keys(b).length) S.borrow.set(it.id, b);
   }
-  if (!parts.length && S.searching && !it.enriched && !NO_DETAIL.has(it.source)) return '<span class="muted loading-dots">Đang lấy chi tiết</span>';
-  return parts.join(' · ') || '<span class="na">—</span>';
+}
+
+// Sections to display: the row's own, then borrowed ones, each with a note on where it came from.
+function viewSections(it) {
+  const s = { ...(it.sections || {}) };
+  const notes = { ...(it.sectionSource || {}) };
+  for (const [k, v] of Object.entries(S.borrow.get(it.id) || {})) {
+    if (!s[k]) {
+      s[k] = v.text;
+      notes[k] = `${v.sameCode ? 'cùng mã vạch' : 'SP tương tự'} trên ${v.from}`;
+    }
+  }
+  return { s, notes };
+}
+
+const detailPossible = (it) => it.kind !== 'web' && (!NO_DETAIL.has(it.source) || !!it.gtin) && (!!it.url || !!it.gtin);
+const detailPending = (it) => detailPossible(it) && !it.enrichTried && !it.enriched;
+
+function infoLine(it) {
+  const { s, notes } = viewSections(it);
+  const note = (k) => (notes[k] ? ` <span class="src-note">(theo ${esc(notes[k])})</span>` : '');
+  if (it.kind === 'web') {
+    const parts = [];
+    if (s.ingredients) parts.push(`<b>Thành phần</b>${note('ingredients')}: ${esc(s.ingredients)}`);
+    if (s.storage) parts.push(`<b>Bảo quản</b>${note('storage')}: ${esc(s.storage)}`);
+    const d = it.description || it.snippet;
+    if (!parts.length && d) parts.push(esc(d));
+    return parts.join(' · ') || '<span class="na">—</span>';
+  }
+  const pending = detailPending(it) || S.enrichInflightIds?.has(it.id);
+  const missing = pending ? '<span class="muted loading-dots">đang lấy</span>' : '<span class="na">chưa có</span>';
+  const parts = [
+    `<b>Thành phần</b>${note('ingredients')}: ${s.ingredients ? esc(s.ingredients) : missing}`,
+    `<b>Bảo quản</b>${note('storage')}: ${s.storage ? esc(s.storage) : missing}`,
+  ];
+  if (s.usage) parts.push(`<b>Cách dùng</b>${note('usage')}: ${esc(s.usage)}`);
+  const extra = [s.age && `<b>Độ tuổi:</b> ${esc(s.age)}`, s.origin && `<b>Xuất xứ:</b> ${esc(s.origin)}`].filter(Boolean);
+  if (extra.length) parts.push(extra.join(' · '));
+  if (!s.ingredients && !s.storage && (it.description || it.snippet)) parts.push(`<span class="muted">${esc(it.description || it.snippet)}</span>`);
+  return parts.map((p) => `<div class="info-row">${p}</div>`).join('');
+}
+
+// After a search (and whenever the visible rows change), fetch details for rows still lacking them.
+function enrichVisible() {
+  if (S.searching) return;
+  const { list } = filtered();
+  for (const it of list.slice(0, S.limit)) {
+    if (!detailPending(it) || S.enrichAttempted.has(it.id)) continue;
+    if (it.sections?.ingredients && it.sections?.storage) continue;
+    S.enrichAttempted.add(it.id);
+    S.enrichQueue.push(it.id);
+  }
+  pumpEnrich();
+}
+const enrichVisibleSoon = debounce(enrichVisible, 500);
+
+function pumpEnrich() {
+  const runId = S.runId;
+  while (S.enrichInflight < 2 && S.enrichQueue.length) {
+    const ids = S.enrichQueue.splice(0, 8).filter((id) => S.items.has(id));
+    if (!ids.length) continue;
+    S.enrichInflight++;
+    ids.forEach((id) => S.enrichInflightIds.add(id));
+    api('/api/details', { method: 'POST', body: { items: ids.map((id) => S.items.get(id)) } })
+      .then((r) => {
+        if (runId !== S.runId) return;
+        for (const it of r.items || []) if (S.items.has(it.id)) S.items.set(it.id, { ...it, enrichTried: true });
+      })
+      .catch(() => {
+        if (runId !== S.runId) return;
+        for (const id of ids) {
+          const it = S.items.get(id);
+          if (it) S.items.set(id, { ...it, enrichTried: true });
+        }
+      })
+      .finally(() => {
+        ids.forEach((id) => S.enrichInflightIds.delete(id));
+        if (runId !== S.runId) return;
+        S.enrichInflight--;
+        scheduleRender();
+        pumpEnrich();
+      });
+  }
 }
 
 function tagsHtml(it, max = 6) {
@@ -190,6 +320,7 @@ async function init() {
   setView(S.view);
   bindEvents();
   bindSettings();
+  bindImport();
   refreshWatch();
   renderCompareBar();
 
@@ -244,6 +375,11 @@ function startSearch(q, { fresh = $('#opt-fresh').checked } = {}) {
   S.items.clear();
   S.order = [];
   S.tasks.clear();
+  S.runId++;
+  S.enrichQueue = [];
+  S.enrichInflight = 0;
+  S.enrichInflightIds.clear();
+  S.enrichAttempted.clear();
   S.translations = {};
   S.limit = PAGE;
   S.searching = true;
@@ -325,6 +461,7 @@ function endSearch(interrupted = false) {
   if (interrupted && S.doneMs == null) S.doneMs = Math.round(performance.now() - S.t0);
   renderStatus();
   scheduleRender(true);
+  enrichVisible();
 }
 
 function renderStatus() {
@@ -483,6 +620,7 @@ function renderAll() {
   lastRender = performance.now();
   renderStatus();
   populateFilterOptions();
+  computeBorrow();
   renderResults();
   $('#cnt-results').textContent = S.items.size || '';
   if (S.tab === 'insights') renderInsights();
@@ -493,10 +631,17 @@ function renderResults() {
   const shown = list.slice(0, S.limit);
   const priced = list.filter((i) => i.priceVND != null).map((i) => i.priceVND).sort((a, b) => a - b);
   const brands = new Set(list.map((i) => i.brand).filter(Boolean));
+  // How many product rows (not web articles) have ingredients / storage, counting borrowed data.
+  const products = list.filter((i) => i.kind !== 'web');
+  const has = (k) => products.filter((i) => viewSections(i).s[k]).length;
+  const pct = (n) => (products.length ? Math.round((n / products.length) * 100) : 0);
+  const loading = S.enrichQueue.length + S.enrichInflightIds.size;
   $('#result-meta').innerHTML = [
     `Hiển thị <b>${fmtNum(Math.min(S.limit, list.length))}</b>/${fmtNum(list.length)} kết quả${list.length !== S.items.size ? ` (lọc từ ${fmtNum(S.items.size)})` : ''}`,
     priced.length ? `Giá: <b>${fmtShortVND(priced[0])}</b> – <b>${fmtShortVND(priced.at(-1))}</b>, trung vị <b>${fmtShortVND(quantile(priced, 0.5))}</b>` : '',
     brands.size ? `<b>${brands.size}</b> thương hiệu` : '',
+    products.length ? `Có thành phần <b>${pct(has('ingredients'))}%</b> · bảo quản <b>${pct(has('storage'))}%</b> sản phẩm` : '',
+    loading ? `<span class="muted loading-dots">Đang lấy thành phần & bảo quản cho ${loading} sản phẩm</span>` : '',
   ].filter(Boolean).join(' · ');
 
   if (!list.length) {
@@ -511,6 +656,7 @@ function renderResults() {
   $('#more-btn').hidden = list.length <= S.limit;
   $('#more-btn').textContent = `Xem thêm (${fmtNum(list.length - S.limit)})`;
   S.fresh.clear();
+  if (!S.searching) enrichVisibleSoon();
 }
 
 function tableHtml(rows) {
@@ -575,7 +721,7 @@ function openDrawer(id) {
   drawerId = id;
   $('#drawer').hidden = false;
   renderDrawer(it);
-  if (!it.enriched && !NO_DETAIL.has(it.source) && it.url && !S.detailLoading.has(id)) loadDetail(it);
+  if (detailPending(it) && !S.detailLoading.has(id)) loadDetail(it);
 }
 function closeDrawer() {
   $('#drawer').hidden = true;
@@ -588,7 +734,7 @@ async function loadDetail(it, fresh = false) {
   try {
     const r = await api('/api/detail', { method: 'POST', body: { item: it, fresh } });
     if (r.error) toast(`Không lấy được chi tiết: ${r.error}`);
-    updateItem(r.item);
+    updateItem({ ...r.item, enrichTried: true });
   } catch (e) {
     toast(`Lỗi: ${e.message}`);
   } finally {
@@ -607,7 +753,7 @@ function updateItem(it) {
 }
 
 function renderDrawer(it) {
-  const s = it.sections || {};
+  const { s, notes } = viewSections(it);
   const loading = S.detailLoading.has(it.id);
   const foreign = it.country && it.country !== 'vn';
   const kv = [
@@ -640,7 +786,7 @@ function renderDrawer(it) {
           <button class="btn small" data-dact="watch">${isWatched(it.id) ? '★ Đang theo dõi' : '☆ Theo dõi'}</button>
           <button class="btn small" data-dact="compare">${S.compare.has(it.id) ? '✓ Trong so sánh' : '⇄ So sánh'}</button>
           <button class="btn small ghost" data-dact="similar" title="Tìm sản phẩm này ở VN và các thị trường lớn">Tìm ở thị trường khác</button>
-          ${!NO_DETAIL.has(it.source) && it.url ? `<button class="btn small ghost" data-dact="reload" ${loading ? 'disabled' : ''}>${loading ? 'Đang tải…' : it.enriched ? 'Tải lại chi tiết' : 'Tải chi tiết'}</button>` : ''}
+          ${detailPossible(it) ? `<button class="btn small ghost" data-dact="reload" ${loading ? 'disabled' : ''}>${loading ? 'Đang tải…' : it.enriched ? 'Tải lại chi tiết' : 'Tải chi tiết'}</button>` : ''}
           ${foreign ? '<button class="btn small ghost" data-dact="translate">Dịch sang tiếng Việt</button>' : ''}
         </div>
       </div>
@@ -648,7 +794,10 @@ function renderDrawer(it) {
     <div class="kv">${kv.map(([k, v]) => `<div>${k}</div><div>${v}</div>`).join('')}</div>
     <div id="d-sections">
       ${loading && !sections.length ? '<div class="section-block"><div class="skeleton" style="height:14px;width:60%"></div><div class="skeleton" style="height:14px;margin-top:8px"></div><div class="skeleton" style="height:14px;margin-top:8px;width:80%"></div></div>' : ''}
-      ${sections.map(([k, label]) => `<div class="section-block" data-sec="${k}"><h3>${label}</h3><div class="sec-text">${esc(s[k])}</div></div>`).join('')}
+      ${sections.map(([k, label]) => `<div class="section-block" data-sec="${k}"><h3>${label}${notes[k] ? ` <span class="src-note">— theo ${esc(notes[k])}</span>` : ''}</h3><div class="sec-text">${esc(s[k])}</div></div>`).join('')}
+      ${(it.enrichTried || it.enriched) && !loading && it.kind !== 'web'
+    ? ['ingredients', 'storage'].filter((k) => !s[k]).map((k) => `<div class="section-block"><h3>${SECTION_LABELS[k]}</h3><div class="sec-text muted">Chưa tìm thấy trên trang sản phẩm, qua mã vạch hay ở sản phẩm tương tự — mở trang gốc để xem ảnh nhãn.</div></div>`).join('')
+    : ''}
       ${it.description ? `<div class="section-block" data-sec="description"><h3>Mô tả</h3><div class="sec-text">${esc(it.description)}</div></div>` : ''}
       ${!sections.length && !it.description && it.snippet ? `<div class="section-block" data-sec="snippet"><h3>Trích đoạn</h3><div class="sec-text">${esc(it.snippet)}</div></div>` : ''}
       ${!sections.length && !loading && NO_DETAIL.has(it.source) ? '<p class="muted small">Nguồn này không cho phép đọc trang chi tiết tự động — mở trang gốc để xem thành phần và hướng dẫn.</p>' : ''}
@@ -743,7 +892,10 @@ function renderCompare() {
       ${row('Nhãn', (it) => (it.claims?.length ? it.claims.map((c) => `<span class="tag claim">${esc(c)}</span>`).join(' ') : null))}
       ${row('Dị ứng', (it) => (it.allergens?.length ? it.allergens.map((c) => `<span class="tag allergen">${esc(c)}</span>`).join(' ') : null))}
       ${row('Đánh giá / bán', (it) => (it.rating || it.sold ? rateHtml(it) : null))}
-      ${Object.entries(SECTION_LABELS).map(([k, label]) => (items.some((it) => it.sections?.[k]) ? row(label, (it) => (it.sections?.[k] ? `<span class="small">${esc(it.sections[k])}</span>` : null)) : '')).join('')}
+      ${Object.entries(SECTION_LABELS).map(([k, label]) => (items.some((it) => viewSections(it).s[k]) ? row(label, (it) => {
+        const { s: vs, notes } = viewSections(it);
+        return vs[k] ? `<span class="small">${esc(vs[k])}</span>${notes[k] ? `<div class="src-note">theo ${esc(notes[k])}</div>` : ''}` : null;
+      }) : '')).join('')}
       ${row('Link', (it) => (it.url ? `<a href="${esc(it.url)}" target="_blank" rel="noopener noreferrer">Mở trang ↗</a>` : null))}
     </tbody></table></div>`;
 }
@@ -1045,13 +1197,14 @@ function toCSV(rows, sep = ',') {
 }
 
 function exportRows(list) {
-  const head = ['Tên sản phẩm', 'Thương hiệu', 'Nguồn', 'Người bán', 'Quốc gia', 'Thị trường tìm', 'Giá nguyên tệ', 'Tiền tệ', 'Giá VNĐ', 'Giá niêm yết VNĐ', 'Giảm %', 'Quy cách', 'Giá/100g VNĐ', 'Độ tuổi (tháng)', 'Loại', 'Nhãn', 'Dị ứng', 'Đánh giá', 'Lượt đánh giá', 'Đã bán', 'Thành phần', 'Cách dùng', 'Bảo quản', 'Xuất xứ', 'Hạn sử dụng', 'Mô tả', 'Link', 'Ảnh'];
+  const head = ['Tên sản phẩm', 'Thương hiệu', 'Nguồn', 'Người bán', 'Quốc gia', 'Thị trường tìm', 'Giá nguyên tệ', 'Tiền tệ', 'Giá VNĐ', 'Giá niêm yết VNĐ', 'Giảm %', 'Quy cách', 'Giá/100g VNĐ', 'Độ tuổi (tháng)', 'Loại', 'Nhãn', 'Dị ứng', 'Đánh giá', 'Lượt đánh giá', 'Đã bán', 'Thành phần', 'Cách dùng', 'Bảo quản', 'Xuất xứ', 'Hạn sử dụng', 'Nguồn thành phần/bảo quản', 'Mô tả', 'Link', 'Ảnh'];
   const rows = list.map((it) => {
-    const s = it.sections || {};
+    const { s, notes } = viewSections(it);
+    const srcNote = ['ingredients', 'storage'].filter((k) => s[k]).map((k) => `${SECTION_LABELS[k]}: ${notes[k] || 'trang sản phẩm'}`).join('; ');
     return [it.title, it.brand, S.srcName[it.source], it.seller, it.countries?.length > 1 ? it.countries.map(countryName).join('; ') : countryName(it.country), marketName(it.market),
       it.price, it.currency, it.priceVND, it.originalPriceVND, it.discount, it.qty?.label, it.pricePer100VND, it.ageMonths, it.type,
       (it.claims || []).join('; '), (it.allergens || []).join('; '), it.rating, it.reviews, it.sold, s.ingredients, s.usage, s.storage,
-      s.origin, s.expiry, it.description || it.snippet, it.url, it.image];
+      s.origin, s.expiry, srcNote, it.description || it.snippet, it.url, it.image];
   });
   return [head, ...rows];
 }
@@ -1087,6 +1240,160 @@ const fetchSuggest = debounce(async (q) => {
   $('#suggest').hidden = false;
   sugIndex = -1;
 }, 160);
+
+// ---------------------------------------------------------------- import opportunities (NKCN check)
+
+const IMP_CLASSES = {
+  absent: ['Chưa có tại VN', 'Không thấy thương hiệu lẫn sản phẩm trên các kênh VN'],
+  brand: ['Hãng có, SP chưa', 'Thương hiệu đã bán tại VN nhưng chưa thấy sản phẩm này'],
+  partial: ['Có bán, chưa đủ chuẩn NKCN', 'Có tin bán tại VN nhưng chưa đủ 2 chuỗi lớn + tên nhà nhập khẩu (thường là xách tay/nhỏ lẻ)'],
+  nkcn: ['Đã NKCN', 'Có ở ≥2 chuỗi mẹ & bé lớn và có tên nhà nhập khẩu/phân phối'],
+};
+const WEST = ['vn', 'us', 'ca', 'gb', 'de', 'fr', 'it', 'es', 'nl', 'au'];
+S.imp = { results: new Map(), running: false, total: 0, filter: '', importers: [], ctrl: null };
+
+// Foreign product rows from the current results (respecting the Results tab filters), one per product.
+function importCandidates() {
+  const { list } = filtered();
+  const seen = new Set();
+  return list.filter((it) => {
+    if (it.kind === 'web' || it.nonFood || it.market === 'vn' || it.country === 'vn') return false;
+    const key = it.gtin || fold(`${it.brand || ''} ${it.title}`).replace(/\d+\s*(g|ml|oz)\b/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 80);
+}
+
+async function runImportCheck() {
+  const items = importCandidates();
+  if (!items.length) {
+    toast('Chưa có sản phẩm nước ngoài trong kết quả. Hãy chọn thêm thị trường (nút Âu–Mỹ–Úc) rồi tìm kiếm.', 5000);
+    return;
+  }
+  S.imp.ctrl?.abort();
+  const ctrl = new AbortController();
+  Object.assign(S.imp, { results: new Map(), running: true, total: items.length, importers: [], ctrl, t0: performance.now() });
+  renderImport();
+  const slim = items.map((it) => ({
+    id: it.id, title: it.title, brand: it.brand, image: it.image, url: it.url, country: it.country, market: it.market, gtin: it.gtin,
+    priceVND: it.priceVND, price: it.price, currency: it.currency, rating: it.rating, reviews: it.reviews, sold: it.sold, source: it.source, qty: it.qty,
+  }));
+  try {
+    const res = await fetch('/api/import-check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items: slim }), signal: ctrl.signal });
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const msg = JSON.parse(buf.slice(0, i));
+        buf = buf.slice(i + 1);
+        if (msg.type === 'result') S.imp.results.set(msg.result.id, msg.result);
+        if (msg.type === 'done') S.imp.importers = msg.importers || [];
+        renderImportSoon();
+      }
+    }
+  } catch (e) {
+    if (e.name !== 'AbortError') toast(`Lỗi phân tích: ${e.message}`);
+  } finally {
+    if (S.imp.ctrl === ctrl) S.imp.running = false;
+    renderImport();
+  }
+}
+const renderImportSoon = debounce(() => renderImport(), 150);
+
+const impScore = (r) => {
+  // Opportunity first (absent > brand > partial > nkcn), then demand abroad and in VN.
+  const order = { absent: 3, brand: 2, partial: 1, nkcn: 0 }[r.class];
+  return order * 1e9 + (r.product.reviews || 0) * 10 + (r.product.sold || 0) + (r.vn.sold || 0);
+};
+
+function renderImport() {
+  const all = [...S.imp.results.values()];
+  $('#cnt-import').textContent = all.filter((r) => r.class !== 'nkcn').length || '';
+  if (S.tab !== 'import') return;
+  const counts = Object.fromEntries(Object.keys(IMP_CLASSES).map((k) => [k, all.filter((r) => r.class === k).length]));
+  const secs = ((performance.now() - (S.imp.t0 || performance.now())) / 1000).toFixed(0);
+  $('#imp-run').disabled = S.imp.running;
+  $('#imp-run').textContent = S.imp.running ? 'Đang phân tích…' : `Phân tích ${importCandidates().length} sản phẩm nước ngoài`;
+  $('#imp-status').innerHTML = !S.imp.total
+    ? `<span>Bước 1: tìm sản phẩm với các thị trường nước ngoài (nút <b>Âu–Mỹ–Úc</b>). Bước 2: bấm <b>Phân tích</b> — app tìm từng sản phẩm trên các kênh Việt Nam và phân loại.</span>`
+    : `${S.imp.running ? '<span class="loading-dots">Đang kiểm tra</span>' : 'Đã kiểm tra'} <b>${all.length}</b>/${S.imp.total} sản phẩm${S.imp.running ? ` · ${secs}s` : ''}`;
+  $('#imp-filters').innerHTML = all.length ? [['', `Tất cả (${all.length})`], ...Object.entries(IMP_CLASSES).map(([k, [label]]) => [k, `${label} (${counts[k]})`])]
+    .map(([k, label]) => `<button type="button" class="chip" data-imp-filter="${k}" aria-pressed="${S.imp.filter === k}" title="${esc(IMP_CLASSES[k]?.[1] || '')}">${k ? `<span class="cls ${k}">●</span>` : ''}${esc(label)}</button>`).join('') : '';
+  const rows = all.filter((r) => !S.imp.filter || r.class === S.imp.filter).sort((a, b) => impScore(b) - impScore(a));
+  $('#imp-results').innerHTML = rows.length ? `<div class="table-wrap"><table class="results imp"><thead><tr>
+      <th class="c-img">Ảnh</th><th class="c-title">Sản phẩm (nước ngoài)</th><th>Kết luận tại VN</th><th>Bằng chứng tại VN</th><th class="c-price">Giá NN / VN</th>
+    </tr></thead><tbody>${rows.map(impRow).join('')}</tbody></table></div>`
+    : (S.imp.total && !S.imp.running ? '<div class="panel muted">Không có sản phẩm trong nhóm này.</div>' : '');
+  const imps = S.imp.importers;
+  $('#imp-importers').innerHTML = imps.length ? `<div class="panel" style="margin-top:14px"><h3>Nhà nhập khẩu / phân phối tìm thấy <span class="muted">theo thương hiệu</span></h3>
+    <table class="simple"><thead><tr><th>Thương hiệu</th><th>Công ty</th></tr></thead><tbody>${imps.map((x) => `<tr><td><b>${esc(x.brand)}</b></td><td>${esc(x.importer)}</td></tr>`).join('')}</tbody></table></div>` : '';
+}
+
+function impRow(r) {
+  const p = r.product;
+  const [label] = IMP_CLASSES[r.class];
+  const vn = r.vn;
+  const evidence = [
+    vn.listings ? `<b>${vn.listings}</b> tin bán khớp (${vn.strong} chắc chắn)` : 'Không có tin bán khớp',
+    r.chains.length ? `Chuỗi: <b>${r.chains.map(esc).join(', ')}</b>` : '',
+    r.importers.length ? `NK/PP: <b>${r.importers.map(esc).join('; ')}</b>` : r.brandImporter ? `PP của hãng: ${esc(r.brandImporter)}` : '',
+    vn.official ? `${vn.official} gian hàng chính hãng/Mall` : '',
+    vn.sold ? `Đã bán tại VN: <b>${fmtCompact(vn.sold)}</b>` : '',
+    vn.handCarried ? `<span class="tag ad">${vn.handCarried} tin xách tay</span>` : '',
+    r.class === 'brand' || r.class === 'absent' ? `Thương hiệu: ${r.brandListings} tin bán tại VN` : '',
+  ].filter(Boolean).join('<br>');
+  const matches = r.matches.length ? `<details class="imp-matches"><summary>Xem ${r.matches.length} tin bán tại VN</summary>${r.matches.map((m) => `
+      <div class="imp-match">${img(m.image, 'mini-thumb')}
+        <div><a href="${esc(m.url)}" target="_blank" rel="noopener noreferrer">${esc(m.title)}</a>
+          <div class="muted">${esc(S.srcName[m.source] || m.source)}${m.seller ? ` · ${esc(m.seller)}` : ''}${m.chain ? ` · <b>${esc(m.chain)}</b>` : ''}${m.official ? ' · chính hãng' : ''}${m.importer ? ` · NK: ${esc(m.importer)}` : ''}${m.handCarried ? ' · xách tay' : ''} · độ khớp ${Math.round(m.score * 100)}%</div></div>
+        <div class="tnum">${m.priceVND ? fmtShortVND(m.priceVND) : ''}${m.sold ? `<div class="muted">bán ${fmtCompact(m.sold)}</div>` : ''}</div>
+      </div>`).join('')}</details>` : '';
+  return `<tr>
+    <td class="c-img">${img(p.image, 'thumb', p.title)}</td>
+    <td class="c-title"><a class="p-title" href="${esc(p.url || '#')}" target="_blank" rel="noopener noreferrer">${esc(p.title)}</a>
+      <div class="p-sub">${p.brand ? `<b>${esc(p.brand)}</b> · ` : ''}${flag(p.country)} ${esc(countryName(p.country))} · ${esc(S.srcName[p.source] || p.source)}</div>
+      ${p.rating || p.reviews ? `<div class="rate"><span class="star">★</span> ${fmtNum(p.rating, 1)}${p.reviews ? ` (${fmtCompact(p.reviews)} đánh giá)` : ''}</div>` : ''}</td>
+    <td><span class="cls ${r.class}">${esc(label)}</span>${r.uncertain ? ' <span class="tag ad" title="Một số kênh VN chính không trả lời — kết luận có thể sai">chưa chắc</span>' : ''}<ul class="imp-reasons">${r.reasons.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></td>
+    <td class="small">${evidence}${matches}</td>
+    <td class="c-price tnum">${p.priceVND ? fmtVND(p.priceVND) : '—'}<div class="muted small">VN: ${vn.minPriceVND ? fmtShortVND(vn.minPriceVND) + (vn.maxPriceVND > vn.minPriceVND ? `–${fmtShortVND(vn.maxPriceVND)}` : '') : '—'}</div></td>
+  </tr>`;
+}
+
+function exportImport() {
+  const rows = [...S.imp.results.values()].sort((a, b) => impScore(b) - impScore(a));
+  if (!rows.length) return toast('Chưa có kết quả để xuất.');
+  const head = ['Sản phẩm', 'Thương hiệu', 'Nước', 'Giá NN (VNĐ)', 'Đánh giá NN', 'Kết luận', 'Chưa chắc', 'Lý do', 'Số tin VN khớp', 'Chuỗi lớn', 'Nhà NK/PP', 'NPP của hãng', 'Đã bán VN', 'Tin xách tay', 'Giá VN thấp nhất', 'Link NN', 'Link VN'];
+  const data = rows.map((r) => [r.product.title, r.product.brand, countryName(r.product.country), r.product.priceVND, r.product.reviews, IMP_CLASSES[r.class][0], r.uncertain ? 'có' : '',
+    r.reasons.join(' | '), r.vn.listings, r.chains.join('; '), r.importers.join('; '), r.brandImporter, r.vn.sold, r.vn.handCarried, r.vn.minPriceVND, r.product.url,
+    r.matches.slice(0, 5).map((m) => m.url).join(' ')]);
+  download(`co-hoi-nhap-khau-${new Date().toISOString().slice(0, 10)}.csv`, toCSV([head, ...data]), 'text/csv;charset=utf-8');
+}
+
+function bindImport() {
+  $('#imp-run').addEventListener('click', runImportCheck);
+  $('#imp-export').addEventListener('click', exportImport);
+  $('#imp-filters').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-imp-filter]');
+    if (!b) return;
+    S.imp.filter = b.dataset.impFilter;
+    renderImport();
+  });
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-market-set]');
+    if (!b) return;
+    const set = b.dataset.marketSet;
+    S.markets = set === 'all' ? S.meta.markets.map((m) => m.code) : set === 'west' ? WEST.filter((m) => S.meta.markets.some((x) => x.code === m)) : ['vn'];
+    save('markets', S.markets);
+    renderMarkets();
+    toast(set === 'vn' ? 'Chỉ tìm tại Việt Nam' : `Đã chọn ${S.markets.length} thị trường — bấm Tìm kiếm`);
+  });
+}
 
 // ---------------------------------------------------------------- source settings (API keys)
 
@@ -1307,6 +1614,7 @@ function switchTab(tab) {
   });
   if (tab === 'insights') renderInsights();
   if (tab === 'compare') renderCompare();
+  if (tab === 'import') renderImport();
   if (tab === 'watch') renderWatch();
   if (tab === 'history') renderHistory();
   if (tab === 'keywords' && !$('#keywords').innerHTML && (S.q || $('#q').value)) runKeywords(S.q || $('#q').value);

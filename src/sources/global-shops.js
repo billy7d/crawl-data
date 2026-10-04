@@ -1,19 +1,27 @@
 // Foreign retailers that can be read without an API key: public JSON endpoints or server-rendered pages.
 import * as cheerio from 'cheerio';
 import { fetchJSON, fetchText, request, HttpError } from '../lib/http.js';
-import { extractEmbeddedProducts } from '../lib/extract.js';
-import { clean, fold } from '../lib/normalize.js';
+import { extractEmbeddedProducts, flattenStrings, textFromHtml } from '../lib/extract.js';
+import { clean, fold, truncate } from '../lib/normalize.js';
 
 const slug = (s) => fold(s).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 const decodeEntities = (s) => clean(String(s || '').replace(/&#(\d+);/g, (_, n) => String.fromCharCode(n)).replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#x27;|&apos;/g, "'"));
 const group = 'Shop nước ngoài';
+
+// HTML/plain value -> one tidy line for a section, or undefined when empty.
+const sec = (v, n = 500) => {
+  const t = clean(textFromHtml(Array.isArray(v) ? v.join(', ') : v));
+  return t.length >= 4 ? truncate(t, n) : undefined;
+};
+const compact = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v));
 
 // ---------------- Amazon (DE, AU, JP usually open; US/UK/SG often show a captcha) ----------------
 
 const AMAZON = {
   us: ['www.amazon.com', 'USD', 'en-US'], gb: ['www.amazon.co.uk', 'GBP', 'en-GB'], de: ['www.amazon.de', 'EUR', 'de-DE'],
   fr: ['www.amazon.fr', 'EUR', 'fr-FR'], jp: ['www.amazon.co.jp', 'JPY', 'ja-JP'], au: ['www.amazon.com.au', 'AUD', 'en-AU'],
-  sg: ['www.amazon.sg', 'SGD', 'en-SG'],
+  sg: ['www.amazon.sg', 'SGD', 'en-SG'], ca: ['www.amazon.ca', 'CAD', 'en-CA'], it: ['www.amazon.it', 'EUR', 'it-IT'],
+  es: ['www.amazon.es', 'EUR', 'es-ES'], nl: ['www.amazon.nl', 'EUR', 'nl-NL'],
 };
 
 export const amazon = {
@@ -94,8 +102,32 @@ export const target = {
         sponsored: !!p.is_sponsored_sku,
         seller: 'Target',
         gtin: it.primary_barcode || null,
+        extra: { tcin: p.tcin },
       };
     }).filter((x) => x.title);
+  },
+  // Product details: marketing copy + bullets (age, form, claims); ingredients when Target lists them.
+  detailNeeds: (item) => item.extra?.tcin,
+  async detail(item, { signal }) {
+    const tcin = item.extra?.tcin;
+    if (!tcin) return null;
+    const d = await fetchJSON('https://redsky.target.com/redsky_aggregations/v1/web/pdp_client_v1?key=9f36aeafbe60771e321a7cc95a78140772ab3e96'
+      + `&tcin=${tcin}&pricing_store_id=3991&has_pricing_store_id=true&visitor_id=0190AB12CD34EF560000000000000000`, { signal, timeout: 8000 });
+    const it = d.data?.product?.item || {};
+    const pd = it.product_description || {};
+    const bullets = (pd.bullet_descriptions || []).map((b) => clean(textFromHtml(b)));
+    const bullet = (re) => bullets.find((b) => re.test(b))?.replace(/^[^:]+:\s*/, '');
+    const nf = it.enrichment?.nutrition_facts || {};
+    return {
+      description: sec(pd.downstream_description, 600),
+      gtin: it.primary_barcode || null,
+      sections: compact({
+        ingredients: sec(nf.ingredients || nf.value_prepared_list?.[0]?.ingredients),
+        age: sec(bullet(/^Age Level/i)),
+        warnings: sec(nf.warning || bullet(/^Allergens?/i)),
+        usage: sec(bullet(/^State of Readiness|^Preparation/i)),
+      }),
+    };
   },
 };
 
@@ -186,6 +218,15 @@ export const morrisons = embeddedStore({
 // ---------------- Australia ----------------
 
 let wowCookie = { v: '', exp: 0 };
+async function woolworthsCookie(signal) {
+  if (wowCookie.exp < Date.now()) {
+    const home = await request('https://www.woolworths.com.au/', { signal, timeout: 8000, lang: 'en-AU,en;q=0.9' });
+    await home.arrayBuffer();
+    wowCookie = { v: home.headers.getSetCookie().map((c) => c.split(';')[0]).join('; '), exp: Date.now() + 20 * 60e3 };
+  }
+  return wowCookie.v;
+}
+
 export const woolworths = {
   id: 'woolworths',
   name: 'Woolworths',
@@ -193,12 +234,32 @@ export const woolworths = {
   group,
   markets: ['au'],
   limit: { concurrency: 1, gap: 600 },
+  // Product detail API: ingredients, storage instructions, allergen statements.
+  detailNeeds: (item) => item.extra?.stockcode,
+  async detail(item, { signal }) {
+    const code = item.extra?.stockcode;
+    if (!code) return null;
+    const res = await request(`https://www.woolworths.com.au/apis/ui/product/detail/${code}?isMobile=false&useVariant=true`, {
+      signal, timeout: 9000, lang: 'en-AU,en;q=0.9', accept: 'application/json',
+      headers: { Cookie: await woolworthsCookie(signal), Referer: item.url },
+    });
+    const d = await res.json();
+    const a = d.AdditionalAttributes || {};
+    const allergens = [a.allergystatement, a.allergenmaybepresent && `May contain: ${a.allergenmaybepresent}`].filter(Boolean).join('. ');
+    return {
+      description: sec(d.Product?.RichDescription || a.description, 600),
+      sections: compact({
+        ingredients: sec(a.ingredients),
+        storage: sec(a.storageinstructions),
+        usage: sec(a.directions || a.usageinstructions || a.preparationinstructions),
+        warnings: sec(allergens),
+        age: sec(a.lifestageage || a.suitablefor),
+        origin: typeof d.CountryOfOriginLabel === 'string' ? sec(d.CountryOfOriginLabel, 120) : undefined,
+      }),
+    };
+  },
   async search({ q, signal }) {
-    if (wowCookie.exp < Date.now()) {
-      const home = await request('https://www.woolworths.com.au/', { signal, timeout: 8000, lang: 'en-AU,en;q=0.9' });
-      await home.arrayBuffer();
-      wowCookie = { v: home.headers.getSetCookie().map((c) => c.split(';')[0]).join('; '), exp: Date.now() + 20 * 60e3 };
-    }
+    await woolworthsCookie(signal);
     const res = await request('https://www.woolworths.com.au/apis/ui/Search/products', {
       method: 'POST',
       signal,
@@ -229,6 +290,7 @@ export const woolworths = {
       gtin: p.Barcode || null,
       snippet: p.CupString || null,
       seller: 'Woolworths',
+      extra: { stockcode: p.Stockcode },
     })).filter((x) => x.title);
   },
 };
@@ -260,8 +322,30 @@ export const dm = {
         rating: t.rating?.ratingValue || null,
         reviews: t.rating?.ratingCount || null,
         seller: 'dm',
+        extra: { dan: p.dan },
       };
     });
+  },
+  // Detail by dm article number: grouped texts "Zutaten", "Aufbewahrungshinweise", "Zubereitung"…
+  detailNeeds: (item) => item.extra?.dan,
+  async detail(item, { signal }) {
+    const dan = item.extra?.dan;
+    if (!dan) return null;
+    const d = await fetchJSON(`https://products.dm.de/product/products/detail/DE/dan/${dan}`, { signal, timeout: 8000, lang: 'de-DE,de;q=0.9' });
+    const KIND = {
+      Zutaten: 'ingredients', Aufbewahrungshinweise: 'storage', Zubereitung: 'usage', Verwendungshinweise: 'usage',
+      Allergene: 'warnings', Warnhinweise: 'warnings', Produktbeschreibung: 'description',
+    };
+    const out = { sections: {} };
+    for (const g of d.descriptionGroups || []) {
+      const kind = KIND[g.header];
+      if (!kind) continue;
+      const text = sec(flattenStrings(g.contentBlock).join(' '), kind === 'description' ? 600 : 500);
+      if (!text) continue;
+      if (kind === 'description') out.description ||= text;
+      else out.sections[kind] ||= text;
+    }
+    return out;
   },
 };
 
@@ -292,6 +376,15 @@ export const fairprice = {
         gtin: p.barcodes?.[0] || null,
         seller: 'FairPrice',
         origin: p.metaData?.['Country of Origin'] || null,
+        // The search API already carries the label data — no detail request needed.
+        description: sec(p.metaData?.['Key Information'], 600),
+        sections: compact({
+          ingredients: sec(p.metaData?.Ingredients),
+          storage: sec(p.metaData?.['Storage Information']),
+          usage: sec(p.metaData?.Preparation),
+          origin: sec(p.metaData?.['Country of Origin'], 80),
+        }),
+        enriched: true,
       };
     });
   },

@@ -20,6 +20,7 @@
     <nav class="tabs" role="tablist" aria-label="Chế độ xem">
       <button role="tab" data-tab="results" aria-selected="true">Kết quả <span class="count" id="cnt-results"></span></button>
       <button role="tab" data-tab="insights">Tổng quan thị trường</button>
+      <button role="tab" data-tab="import">Cơ hội nhập khẩu <span class="count" id="cnt-import"></span></button>
       <button role="tab" data-tab="compare">So sánh <span class="count" id="cnt-compare"></span></button>
       <button role="tab" data-tab="watch">Theo dõi <span class="count" id="cnt-watch"></span></button>
       <button role="tab" data-tab="keywords">Từ khóa</button>
@@ -50,6 +51,11 @@
       <div class="opt-group">
         <span class="opt-label">Thị trường</span>
         <div id="markets" class="chips"></div>
+        <div class="chips">
+          <button type="button" class="chip quick" data-market-set="west" title="Mỹ, Canada, Anh, Đức, Pháp, Ý, Tây Ban Nha, Hà Lan, Úc (+ Việt Nam)">Âu–Mỹ–Úc</button>
+          <button type="button" class="chip quick" data-market-set="all" title="Tất cả thị trường">Tất cả</button>
+          <button type="button" class="chip quick" data-market-set="vn" title="Chỉ Việt Nam">Chỉ VN</button>
+        </div>
       </div>
       <div class="opt-group">
         <details class="dropdown" id="sources-dd">
@@ -145,6 +151,24 @@
     <!-- INSIGHTS -->
     <section class="view" id="view-insights" role="tabpanel" hidden>
       <div id="insights"></div>
+    </section>
+
+    <!-- IMPORT CHECK -->
+    <section class="view" id="view-import" role="tabpanel" hidden>
+      <div class="view-head">
+        <div>
+          <h2>Cơ hội nhập khẩu</h2>
+          <p class="muted">Đối chiếu sản phẩm tìm thấy ở nước ngoài với các kênh bán tại Việt Nam (Con Cưng, Kids Plaza, Bibomart, AVAKids, Tiki, Lazada, Shopee…). <b>Đã NKCN</b> = có ở ít nhất 2 chuỗi mẹ &amp; bé lớn <b>và</b> tìm thấy tên nhà nhập khẩu/phân phối. Đây là suy luận từ dữ liệu công khai — hãy kiểm tra lại bằng link bằng chứng.</p>
+        </div>
+        <div class="row-actions">
+          <button class="btn primary" id="imp-run">Phân tích sản phẩm nước ngoài</button>
+          <button class="btn ghost" id="imp-export">Xuất CSV</button>
+        </div>
+      </div>
+      <div id="imp-status" class="result-meta"></div>
+      <div id="imp-filters" class="chips" style="margin:6px 0 12px"></div>
+      <div id="imp-results"></div>
+      <div id="imp-importers"></div>
     </section>
 
     <!-- COMPARE -->

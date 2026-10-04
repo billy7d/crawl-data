@@ -88,8 +88,19 @@ export async function fetchText(url, { proxy, ...opts } = {}) {
 }
 
 export async function fetchJSON(url, opts = {}) {
-  const res = await request(url, { accept: 'application/json, text/plain, */*', ...opts });
-  const text = await res.text();
+  let text;
+  let status;
+  if (opts.proxy) {
+    // Through fetchText so a captcha page (HTML instead of JSON) can be retried via SCRAPE_PROXY.
+    const r = await fetchText(url, { accept: 'application/json, text/plain, */*', ...opts });
+    ({ text, status } = r);
+    if (!r.proxied && proxyEnabled() && !/^\s*[[{]/.test(text)) ({ text, status } = await fetchText(url, { ...opts, proxy: 'always' }));
+  } else {
+    const res = await request(url, { accept: 'application/json, text/plain, */*', ...opts });
+    text = await res.text();
+    status = res.status;
+  }
+  const res = { status };
   try {
     return JSON.parse(text);
   } catch {

@@ -117,8 +117,14 @@ export function mergeDetail(item, d, ctx) {
   if (!item.gtin && d.gtin) item.gtin = d.gtin;
   if (!item.origin && d.origin) item.origin = d.origin;
   if (d.sold != null && item.sold == null) item.sold = d.sold;
-  item.sections = { ...(d.sections || {}), ...Object.fromEntries(Object.entries(item.sections || {}).filter(([, v]) => v)) };
+  if (d.importer && !item.importer) item.importer = d.importer;
+  const own = Object.fromEntries(Object.entries(item.sections || {}).filter(([, v]) => v));
+  item.sections = { ...(d.sections || {}), ...own };
+  // Which sections came from somewhere other than the listing's own page (e.g. Open Food Facts by barcode).
+  const src = Object.fromEntries(Object.entries(d.sectionSource || {}).filter(([k]) => !own[k]));
+  if (Object.keys(src).length) item.sectionSource = { ...(item.sectionSource || {}), ...src };
   if (d.images?.length) item.images = d.images;
   item.enriched = true;
+  item.enrichTried = true;
   return finalize(item, ctx);
 }

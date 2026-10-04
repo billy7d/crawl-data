@@ -3,7 +3,7 @@
 import { fetchText } from '../lib/http.js';
 import { extractListing } from '../lib/extract.js';
 
-function storeSource({ id, name, group, markets, currency, searchUrl, timeout = 8000, lang, proxy, needsKey }) {
+function storeSource({ id, name, group, markets, currency, searchUrl, timeout = 8000, lang, proxy = 'fallback', needsKey }) {
   return {
     id,
     limit: { concurrency: 2, gap: 400 },
