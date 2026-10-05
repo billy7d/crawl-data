@@ -56,6 +56,9 @@ Mở trình duyệt tại **http://localhost:3000**. Không cần tài khoản h
 | FairPrice | SG | API | |
 | Rakuten | JP | Trang tìm kiếm | |
 | Monoprix | FR | Trang tìm kiếm | Siêu thị Pháp, đọc trực tiếp |
+| Carrefour | FR | Qua `SCRAPE_PROXY` (IP Pháp) | Đọc dữ liệu gốc của trang: giá, giá/kg, **EAN**, quy cách, danh mục, ảnh gốc. Chặn IP ngoài Pháp nên đi qua proxy với `country_code=fr` (1 credit/lần, tự thử gói premium nếu bị chặn) |
+| Auchan | FR | Trang tìm kiếm (trực tiếp) | Tên, ảnh, link, điểm sao. Auchan chỉ hiện giá sau khi chọn cửa hàng nên không có giá |
+| Chronodrive | FR | Qua `SCRAPE_PROXY` | Tên, giá, ảnh, link |
 | Bing Shopping | US, UK, AU, DE, FR | Trang tìm kiếm | Giá từ nhiều shop |
 | **Shop khác (qua search engine)** | Mọi thị trường | Tìm `site:` qua Serper (theo nhóm nhỏ trang bán), dự phòng DuckDuckGo/Bing | 10–14 trang bán mỗi thị trường: siêu thị, nhà thuốc online, cửa hàng mẹ & bé (vd. Pháp: Carrefour, Auchan, Monoprix, Leclerc, Intermarché, Franprix, Chronodrive, Houra, Cdiscount, Aubert, Newpharma, Pharma GDD, Cocooncenter, Amazon). Lấy link và giá trong trích đoạn |
 | Bing, DuckDuckGo | Mọi thị trường | Trang kết quả | Bài viết, review, trang hãng |
@@ -63,7 +66,7 @@ Mở trình duyệt tại **http://localhost:3000**. Không cần tài khoản h
 | Google, Google Shopping | Mọi thị trường | Cần `SERPER_API_KEY` | **Khuyên dùng:** Google Shopping gom giá từ gần như mọi shop |
 | SearXNG | Mọi thị trường | Cần `SEARXNG_URL` | Meta-search tự host: Google + Bing + DDG + Brave + Qwant |
 | Brave Search | Mọi thị trường | Cần `BRAVE_API_KEY` | |
-| Walmart, iHerb, Coles, Coupang (trực tiếp) | | Cần `SCRAPE_PROXY` | Đọc qua proxy chống chặn bot. Asda, Boots, Carrefour, Chemist Warehouse, eBay, Shopee đã bỏ (qua proxy thường chỉ nhận trang chặn; Shopee cần gói ultra premium) — vẫn có qua "Shop khác" |
+| Walmart, iHerb, Coles, Coupang (trực tiếp) | | Cần `SCRAPE_PROXY` | Đọc qua proxy chống chặn bot. Asda, Boots, Chemist Warehouse, eBay, Shopee đã bỏ (qua proxy thường chỉ nhận trang chặn; Shopee cần gói ultra premium) — vẫn có qua "Shop khác" |
 
 ### Về các trang chặn bot (Walmart, Tesco, Amazon US…)
 

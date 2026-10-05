@@ -92,6 +92,11 @@ export function splitBrands(q) {
   return { brands, rest: words.filter((_, i) => !used[i]).join(' ') };
 }
 
+const EU_TERMS = [
+  [/\bpetits? pots?\b/gi, 'baby food jar'], [/\bpotitos?\b|\btarritos?\b/gi, 'baby food jar'], [/\bomogeneizzat[oi]\b/gi, 'baby puree'],
+  [/\bpappin[ae]\b|\bpappa\b/gi, 'baby food'], [/\bbrei\b/gi, 'baby porridge'], [/\bquetschies?\b/gi, 'fruit pouch'], [/\bgourdes?\b/gi, 'fruit pouch'],
+];
+
 export async function translateQuery(q, lang) {
   const base = lang.split('-')[0];
   if (base === 'vi') return q;
@@ -107,7 +112,14 @@ export async function translateQuery(q, lang) {
     if (BABY_VI.test(q) && !BABY_EN.test(en)) en = `baby ${en}`;
   } else {
     const r = await translate(q, 'en');
-    if (r.detected && r.detected !== 'en') en = r.text;
+    // Already in the market's language ("petit pot bébé" for France): a round trip through English only
+    // loses meaning ("pot de bébé"), so search with the user's own words.
+    if (r.detected === base) return q;
+    if (r.detected && r.detected !== 'en') {
+      // Baby-food words machine translation gets wrong ("petit pot" → "potty").
+      const fixed = EU_TERMS.reduce((s, [re, rep]) => s.replace(re, rep), q);
+      en = fixed !== q ? (await translate(fixed, 'en')).text || r.text : r.text;
+    }
   }
   en = en.replace(/\s+/g, ' ').trim();
   if (base === 'en') return en;
