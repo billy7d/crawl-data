@@ -1251,23 +1251,54 @@ const IMP_CLASSES = {
   nkcn: ['Đã NKCN', 'Có ở ≥2 chuỗi mẹ & bé lớn và có tên nhà nhập khẩu/phân phối'],
 };
 const WEST = ['vn', 'us', 'ca', 'gb', 'de', 'fr', 'it', 'es', 'nl', 'au'];
-S.imp = { results: new Map(), running: false, total: 0, filter: '', importers: [], ctrl: null };
+S.imp = { results: new Map(), running: false, total: 0, filter: '', importers: [], ctrl: null, best: [], bestMarkets: [], bestLoading: false };
+const BEST_PER_MARKET = 10;
 
 // Foreign product rows from the current results (respecting the Results tab filters), one per product.
 function importCandidates() {
   const { list } = filtered();
   const seen = new Set();
-  return list.filter((it) => {
+  const perMarket = {};
+  // Best sellers first (top 10 per country, already limited to the baby-food category), then search results.
+  const best = S.imp.best.filter((it) => !it.nonFood && S.markets.includes(it.market) && (perMarket[it.market] = (perMarket[it.market] || 0) + 1) <= BEST_PER_MARKET);
+  return [...best, ...list].filter((it) => {
     if (it.kind === 'web' || it.nonFood || it.market === 'vn' || it.country === 'vn') return false;
     // Shop searches also return unrelated groceries (Marmite for "puffs"…): keep products made for babies.
-    const forBabies = it.ageMonths != null || it.source === 'off' // OFF hits are already limited to the baby-foods category
-      || /\b(baby|babies|infant|toddler|kids?|months?|stage [1-4]|bébé|kinder|beikost)\b|離乳|ベビー|아기|이유식|trẻ em|cho bé/i.test(it.title);
+    const forBabies = it.bestseller || it.ageMonths != null || it.source === 'off' // OFF hits are already limited to the baby-foods category
+      || /(baby|babies|infant|toddler|kids?|months?|stage [1-4]|bébé|kinder|beikost)|離乳|ベビー|아기|이유식|trẻ em|cho bé/i.test(it.title);
     if (!forBabies) return false;
-    const key = it.gtin || fold(`${it.brand || ''} ${it.title}`).replace(/\d+\s*(g|ml|oz)\b/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+    const key = it.gtin || fold(`${it.brand || ''} ${it.title}`).replace(/d+s*(g|ml|oz)/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   }).slice(0, 80);
+}
+
+async function loadBestsellers() {
+  if (S.imp.bestLoading) return;
+  const supported = S.meta.bestsellerMarkets || [];
+  const markets = S.markets.filter((m) => m !== 'vn' && supported.includes(m));
+  if (!markets.length) {
+    toast('Hãy chọn thị trường nước ngoài (nút Âu–Mỹ–Úc hoặc Tất cả) — hiện hỗ trợ: ' + supported.map((m) => m.toUpperCase()).join(', '), 5500);
+    return;
+  }
+  S.imp.bestLoading = true;
+  $('#imp-best').disabled = true;
+  $('#imp-best').textContent = 'Đang lấy bán chạy…';
+  try {
+    const r = await (await fetch('/api/bestsellers?markets=' + markets.join(','))).json();
+    S.imp.best = r.items || [];
+    S.imp.bestMarkets = markets;
+    const ok = new Set(S.imp.best.map((i) => i.market));
+    toast(`Đã lấy ${S.imp.best.length} sản phẩm bán chạy từ ${ok.size}/${markets.length} nước${r.failed?.length ? ` (lỗi: ${r.failed.map((f) => f.market.toUpperCase()).join(', ')})` : ''} — bấm Phân tích`, 5500);
+  } catch (e) {
+    toast('Không lấy được danh sách bán chạy: ' + e.message);
+  } finally {
+    S.imp.bestLoading = false;
+    $('#imp-best').disabled = false;
+    $('#imp-best').textContent = 'Lấy bán chạy theo nước';
+    renderImport();
+  }
 }
 
 async function runImportCheck() {
@@ -1282,7 +1313,7 @@ async function runImportCheck() {
   renderImport();
   const slim = items.map((it) => ({
     id: it.id, title: it.title, brand: it.brand, image: it.image, url: it.url, country: it.country, market: it.market, gtin: it.gtin,
-    priceVND: it.priceVND, price: it.price, currency: it.currency, rating: it.rating, reviews: it.reviews, sold: it.sold, source: it.source, qty: it.qty,
+    priceVND: it.priceVND, price: it.price, currency: it.currency, rating: it.rating, reviews: it.reviews, sold: it.sold, source: it.source, qty: it.qty, rank: it.rank,
   }));
   try {
     const res = await fetch('/api/import-check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items: slim }), signal: ctrl.signal });
@@ -1342,6 +1373,7 @@ function impOpportunity(r) {
     if (pts > 0.4) parts.push([label, Math.round(pts), detail]);
   };
   add('Đánh giá ở nước ngoài', Math.min(30, 7.5 * log10p(p.reviews)), p.reviews ? `${fmtCompact(p.reviews)} đánh giá` : '');
+  add('Hạng bán chạy', p.rank ? Math.max(0, Math.min(15, 17 - p.rank)) : 0, p.rank ? `#${p.rank} nhóm đồ ăn dặm Amazon ${countryName(p.country)}` : '');
   add('Điểm sao', p.rating >= 4.5 ? 5 : p.rating >= 4 ? 3 : 0, p.rating ? `★ ${fmtNum(p.rating, 1)}` : '');
   const b = impBreadth(r);
   add('Độ phủ quốc tế', Math.min(15, 5 * (b.markets - 1) + 2 * (b.retailers - 1)), `${b.markets} nước, ${b.retailers} nhà bán trong kết quả`);
@@ -1527,6 +1559,7 @@ function impRow(r) {
     <td class="c-img">${img(p.image, 'thumb', p.title)}</td>
     <td class="c-title"><a class="p-title" href="${esc(p.url || '#')}" target="_blank" rel="noopener noreferrer">${esc(p.title)}</a>
       <div class="p-sub">${p.brand ? `<b>${esc(p.brand)}</b> · ` : ''}${flag(p.country)} ${esc(countryName(p.country))} · ${esc(S.srcName[p.source] || p.source)}</div>
+      ${p.rank ? `<div class="rate"><span class="tag" title="Thứ hạng trong danh sách bán chạy nhóm đồ ăn dặm của Amazon">#${p.rank} bán chạy · ${esc(countryName(p.country))}</span></div>` : ''}
       ${p.rating || p.reviews ? `<div class="rate"><span class="star">★</span> ${fmtNum(p.rating, 1)}${p.reviews ? ` (${fmtCompact(p.reviews)} đánh giá)` : ''}</div>` : ''}</td>
     <td>${oppCell(r)}</td>
     <td><span class="cls ${r.class}">${esc(label)}</span>
@@ -1548,6 +1581,7 @@ function exportImport() {
 
 function bindImport() {
   $('#imp-run').addEventListener('click', runImportCheck);
+  $('#imp-best').addEventListener('click', loadBestsellers);
   $('#imp-export').addEventListener('click', exportImport);
   $('#view-import').addEventListener('click', async (e) => {
     const tr = e.target.closest('[data-track]');

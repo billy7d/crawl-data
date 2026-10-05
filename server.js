@@ -16,6 +16,7 @@ import { clean, fold } from './src/lib/normalize.js';
 import { CooldownError } from './src/lib/limiter.js';
 import { runSearch } from './src/lib/run.js';
 import { checkProduct, createContext } from './src/lib/importcheck.js';
+import { bestsellers, BESTSELLER_MARKETS } from './src/lib/bestsellers.js';
 import { recordListings, listTracked, dueTracked, track, untrack, saveCheck, stats as salesStats, listImporters } from './src/lib/sales.js';
 import { readSettings, validate, applySettings, testSetting, PROXY_PROVIDERS } from './src/lib/settings.js';
 
@@ -213,6 +214,23 @@ app.get('/api/search', async (req, res) => {
 });
 
 // ---------------- Product detail / translate ----------------
+
+// Best sellers of the baby-food category per home market (Amazon Best Sellers), fed into the import check.
+app.get('/api/bestsellers', async (req, res) => {
+  const markets = String(req.query.markets || '').split(',').filter((m) => BESTSELLER_MARKETS[m]);
+  const ac = new AbortController();
+  res.on('close', () => ac.abort());
+  const failed = [];
+  const lists = await Promise.all(markets.map(async (m) => {
+    try {
+      return await bestsellers(m, { signal: ac.signal, fresh: req.query.fresh === '1' });
+    } catch (e) {
+      failed.push({ market: m, error: e.message });
+      return [];
+    }
+  }));
+  res.json({ items: lists.flat(), failed, markets: Object.keys(BESTSELLER_MARKETS) });
+});
 
 // Official-import check: streams one NDJSON line per product as soon as it is classified.
 app.post('/api/import-check', async (req, res) => {
@@ -494,6 +512,7 @@ app.get('/api/meta', (req, res) => {
     sources: describe(),
     markets: Object.entries(MARKETS).map(([code, m]) => ({ code, name: m.name, lang: m.lang, currency: m.currency })),
     countries: COUNTRY_NAMES,
+    bestsellerMarkets: Object.keys(BESTSELLER_MARKETS),
     rates: rates(),
   });
 });

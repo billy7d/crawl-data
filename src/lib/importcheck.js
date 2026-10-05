@@ -395,7 +395,7 @@ export async function checkProduct(p, ctx, { fast = false } = {}) {
     product: {
       id: p.id, title: p.title, brand: id.brand, image: p.image, url: p.url, country: p.country, market: p.market,
       priceVND: p.priceVND, price: p.price, currency: p.currency, rating: p.rating, reviews: p.reviews, sold: p.sold, source: p.source,
-      qty: id.qty?.label || null, gtin: id.gtin,
+      qty: id.qty?.label || null, gtin: id.gtin, rank: p.rank || null,
     },
     class: cls,
     uncertain,
