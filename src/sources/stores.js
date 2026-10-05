@@ -3,9 +3,10 @@
 import { fetchText } from '../lib/http.js';
 import { extractListing } from '../lib/extract.js';
 
-function storeSource({ id, name, group, markets, currency, searchUrl, timeout = 8000, lang, proxy = 'fallback', needsKey }) {
+function storeSource({ id, name, group, markets, currency, searchUrl, timeout = 8000, lang, proxy = 'fallback', needsKey, filterIrrelevant }) {
   return {
     id,
+    filterIrrelevant,
     limit: { concurrency: 2, gap: 400 },
     name,
     kind: 'shop',
@@ -47,17 +48,13 @@ export const kidsplaza = storeSource({
 const viaProxy = (id, name, markets, currency, lang, searchUrl) => storeSource({
   id, name, group: 'Shop nước ngoài (cần proxy)', markets, currency, lang, searchUrl, timeout: 60000, proxy: 'always', needsKey: 'SCRAPE_PROXY',
 });
+// Asda, Boots, Carrefour, Chemist Warehouse, eBay and Shopee were removed: through a normal proxy they return
+// bot pages or JS shells (Shopee needs ScraperAPI ultra premium). They are covered by siteshop (Google index).
 export const proxied = [
   viaProxy('walmart', 'Walmart', ['us'], 'USD', 'en-US,en;q=0.9', (q) => `https://www.walmart.com/search?q=${q}`),
-  viaProxy('iherb', 'iHerb', ['us'], 'USD', 'en-US,en;q=0.9', (q) => `https://www.iherb.com/search?kw=${q}`),
-  viaProxy('ebay', 'eBay', ['us'], 'USD', 'en-US,en;q=0.9', (q) => `https://www.ebay.com/sch/i.html?_nkw=${q}`),
-  viaProxy('boots', 'Boots', ['gb'], 'GBP', 'en-GB,en;q=0.9', (q) => `https://www.boots.com/sitesearch?searchTerm=${q}`),
-  viaProxy('asda', 'Asda', ['gb'], 'GBP', 'en-GB,en;q=0.9', (q) => `https://www.asda.com/groceries/search/${q}`),
+  { ...viaProxy('iherb', 'iHerb', ['us'], 'USD', 'en-US,en;q=0.9', (q) => `https://www.iherb.com/search?kw=${q}`), filterIrrelevant: true }, // page also has promo cards
   viaProxy('coles', 'Coles', ['au'], 'AUD', 'en-AU,en;q=0.9', (q) => `https://www.coles.com.au/search/products?q=${q}`),
-  viaProxy('chemistwarehouse', 'Chemist Warehouse', ['au'], 'AUD', 'en-AU,en;q=0.9', (q) => `https://www.chemistwarehouse.com.au/search?searchtext=${q}`),
-  viaProxy('carrefour', 'Carrefour', ['fr'], 'EUR', 'fr-FR,fr;q=0.9', (q) => `https://www.carrefour.fr/s?q=${q}`),
   viaProxy('coupang', 'Coupang', ['kr'], 'KRW', 'ko-KR,ko;q=0.9', (q) => `https://www.coupang.com/np/search?q=${q}`),
-  viaProxy('shopee', 'Shopee', ['vn'], 'VND', 'vi-VN,vi;q=0.9', (q) => `https://shopee.vn/search?keyword=${q}`),
 ];
 
 export const rakuten = storeSource({
@@ -69,4 +66,17 @@ export const rakuten = storeSource({
   timeout: 10000,
   lang: 'ja-JP,ja;q=0.9,en;q=0.5',
   searchUrl: (q) => `https://search.rakuten.co.jp/search/mall/${q}/`,
+});
+
+// Monoprix (France): server-rendered search page with schema.org data, readable without a proxy.
+export const monoprix = storeSource({
+  id: 'monoprix',
+  name: 'Monoprix',
+  group: 'Shop nước ngoài',
+  markets: ['fr'],
+  currency: 'EUR',
+  timeout: 10000,
+  lang: 'fr-FR,fr;q=0.9',
+  filterIrrelevant: true,
+  searchUrl: (q) => `https://courses.monoprix.fr/search?q=${q}`,
 });

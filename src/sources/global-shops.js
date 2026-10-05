@@ -1,6 +1,6 @@
 // Foreign retailers that can be read without an API key: public JSON endpoints or server-rendered pages.
 import * as cheerio from 'cheerio';
-import { fetchJSON, fetchText, request, HttpError } from '../lib/http.js';
+import { fetchJSON, fetchText, request, HttpError, proxyEnabled } from '../lib/http.js';
 import { extractEmbeddedProducts, flattenStrings, textFromHtml } from '../lib/extract.js';
 import { clean, fold, truncate } from '../lib/normalize.js';
 
@@ -33,9 +33,17 @@ export const amazon = {
   limit: { concurrency: 1, gap: 1200, perMarket: true, cooldown: 15 * 60e3 },
   async search({ q, market, signal }) {
     const [host, currency, lang] = AMAZON[market];
-    const { text } = await fetchText(`https://${host}/s?k=${encodeURIComponent(q)}`, { signal, timeout: 10000, lang: `${lang},${lang.split('-')[0]};q=0.9`, proxy: 'fallback' });
-    const $ = cheerio.load(text);
-    const cards = $('[data-component-type="s-search-result"]');
+    const url = `https://${host}/s?k=${encodeURIComponent(q)}`;
+    const opts = { signal, timeout: 10000, lang: `${lang},${lang.split('-')[0]};q=0.9`, proxy: 'fallback' };
+    let { text, proxied } = await fetchText(url, opts);
+    let $ = cheerio.load(text);
+    let cards = $('[data-component-type="s-search-result"]');
+    // Amazon's bot check is often a small 200 page without the word captcha: retry it through the proxy.
+    if (!cards.length && !proxied && text.length < 40000 && proxyEnabled()) {
+      ({ text } = await fetchText(url, { ...opts, proxy: 'always' }));
+      $ = cheerio.load(text);
+      cards = $('[data-component-type="s-search-result"]');
+    }
     // A real results page is hundreds of KB; a tiny page without cards is a captcha/interstitial.
     if (!cards.length && (text.length < 40000 || /captcha|api-services-support|robot/i.test(text))) {
       throw new HttpError('Amazon yêu cầu captcha (tạm thời)', 429);

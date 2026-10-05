@@ -188,7 +188,7 @@ export function detectAllergens(ingredients) {
 
 // ---------- Brands ----------
 
-const BRANDS = [
+export const BRANDS = [
   'HiPP', 'Gerber', 'Heinz', 'Nestlé', 'Cerelac', 'Ridielac', 'Vinamilk', 'Nutifood', 'Blédina', 'Bledina', 'Wakodo', 'Pigeon',
   'Kewpie', 'Meiji', 'Morinaga', 'Glico', 'Ella\'s Kitchen', 'Plum Organics', 'Happy Baby', 'Little Freddie', 'Bellamy\'s',
   'Organix', 'Annabel Karmel', 'Earth\'s Best', 'Beech-Nut', 'Sprout', 'Holle', 'Alete', 'Bebivita', 'Babybio', 'Good Goût',
@@ -198,6 +198,11 @@ const BRANDS = [
   'Once Upon a Farm', 'Serenity Kids', 'Yumi', 'Cerebos', 'Wakodo', 'Asahi', 'Bio Kinder', 'Hero Baby', 'Nature\'s Way',
   'Freshly Picked', 'Baby Brezza', 'Picot', 'Topfer', 'Töpfer', 'Humana', 'Bebelac', 'Nestle', 'Bambi', 'Dr. Papie',
   'Mabu', 'Bibo', 'Hokkaido', 'Kizzy', 'Organic Kids', 'Yummy Kids', 'Babee', 'Gold Kids', 'Mầm Xanh', 'Hebi',
+  // Europe / Australia / North America
+  'Mellin', 'Plasmon', 'Milupa', 'Bambix', 'Freche Freunde', 'NaturNes', 'Popote', 'Yooji', 'Kendamil', 'Peter Rabbit Organics',
+  'GoGo squeeZ', 'Little Bellies', 'Little Spoon', 'Cerebelly', 'Happy Tot', 'NurturMe', 'Baby Mum-Mum', 'Heinz By Nature',
+  'Sma', 'Cow & Gate', 'Hipp Organic', 'Nutricia', 'Nutribén', 'Nutriben', 'Hero Solo', 'Smileat', 'Blevit', 'Ordesa', 'Olvarit',
+  'Bebivita', 'Kölln', 'Sunval', "Pom'Potes", 'Materne', 'Gallia', 'Guigoz', 'Modilac', 'Nidal', 'Mamia', 'Bellamy', 'Holle Baby',
 ];
 const BRAND_MATCHERS = [...new Set(BRANDS)].map((b) => [b, new RegExp(`(?<!\\p{L})${fold(b).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?!\\p{L})`, 'u')]);
 

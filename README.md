@@ -23,6 +23,8 @@ Mở trình duyệt tại **http://localhost:3000**. Không cần tài khoản h
 | Nhóm | Chi tiết |
 |---|---|
 | **Tìm kiếm nhanh** | Gọi song song mọi nguồn. Kết quả hiện dần qua streaming (nguồn đầu tiên thường sau ~0,5s). Gợi ý từ khoá khi gõ, phím tắt `/`. Tìm lại cùng từ khoá trong 6 giờ thì lấy từ cache, gần như tức thì. |
+| **Dừng / tìm mới** | Nút **Dừng** ngắt phiên đang chạy (giữ kết quả đã có, máy chủ huỷ các yêu cầu còn lại); nút **Tìm mới** luôn bấm được và thay phiên cũ. Tab Cơ hội nhập khẩu có **Dừng phân tích**. |
+| **Độ phủ tìm kiếm** | ⚙ Cài đặt → Tiết kiệm / Cân bằng / Sâu: số trang Google Shopping và cỡ nhóm trang bán khi tìm qua Serper (sâu hơn = nhiều nguồn hơn, tốn nhiều lượt Serper hơn). Tên thương hiệu và từ như "puffs", "bio" không bị dịch khi tìm ở nước ngoài. |
 | **Đa thị trường** | 14 thị trường: VN, Mỹ, Anh, Úc, Đức, Pháp, Nhật, Hàn, Trung, Singapore, Thái, Malaysia, Philippines, Indonesia. Từ khoá được **tự dịch** sang ngôn ngữ từng nước, có bảng thuật ngữ ăn dặm riêng ("bánh ăn dặm" → "baby snacks", "赤ちゃんのおやつ"). Bản dịch sửa được ngay trên giao diện. |
 | **Bảng tổng hợp** | Ảnh, tên, thương hiệu, giá gốc + quy đổi VNĐ (tỷ giá cập nhật tự động), giá niêm yết/giảm giá, **giá/100g**, quốc gia, xuất xứ, nguồn/người bán, đánh giá, lượt bán. Thông tin chính gồm thành phần, độ tuổi, bảo quản, cách dùng. Nhãn tự nhận diện: hữu cơ, không đường, không muối, không gluten, DHA, sắt, probiotic… |
 | **Lọc & sắp xếp** | Theo nguồn, quốc gia, loại SP, độ tuổi, khoảng giá, nhãn, **loại trừ chất gây dị ứng**. Có thể ẩn quảng cáo, ẩn kết quả ít liên quan, ẩn dụng cụ/phụ kiện. Sắp xếp theo giá, giá/100g, bán chạy, đánh giá, giảm giá. Xem dạng bảng hoặc lưới. |
@@ -53,14 +55,15 @@ Mở trình duyệt tại **http://localhost:3000**. Không cần tài khoản h
 | dm-drogerie | DE | API | |
 | FairPrice | SG | API | |
 | Rakuten | JP | Trang tìm kiếm | |
+| Monoprix | FR | Trang tìm kiếm | Siêu thị Pháp, đọc trực tiếp |
 | Bing Shopping | US, UK, AU, DE, FR | Trang tìm kiếm | Giá từ nhiều shop |
-| **Shop khác (qua search engine)** | Mọi thị trường | Tìm `site:` trên DuckDuckGo/Bing | Lấy link và giá trong trích đoạn của các shop chặn bot: Walmart, iHerb, Boots, Asda, Coles, Chemist Warehouse, Rossmann, Carrefour, Coupang, Tmall, **Shopee**, Bibomart, AVAKids… |
+| **Shop khác (qua search engine)** | Mọi thị trường | Tìm `site:` qua Serper (theo nhóm nhỏ trang bán), dự phòng DuckDuckGo/Bing | 10–14 trang bán mỗi thị trường: siêu thị, nhà thuốc online, cửa hàng mẹ & bé (vd. Pháp: Carrefour, Auchan, Monoprix, Leclerc, Intermarché, Franprix, Chronodrive, Houra, Cdiscount, Aubert, Newpharma, Pharma GDD, Cocooncenter, Amazon). Lấy link và giá trong trích đoạn |
 | Bing, DuckDuckGo | Mọi thị trường | Trang kết quả | Bài viết, review, trang hãng |
 | Open Food Facts (+ Open Prices) | Toàn cầu | API mở | Thành phần, dị ứng, Nutri-Score, các nước đang bán |
 | Google, Google Shopping | Mọi thị trường | Cần `SERPER_API_KEY` | **Khuyên dùng:** Google Shopping gom giá từ gần như mọi shop |
 | SearXNG | Mọi thị trường | Cần `SEARXNG_URL` | Meta-search tự host: Google + Bing + DDG + Brave + Qwant |
 | Brave Search | Mọi thị trường | Cần `BRAVE_API_KEY` | |
-| Walmart, iHerb, eBay, Boots, Asda, Coles, Chemist Warehouse, Carrefour, Coupang, Shopee (trực tiếp) | | Cần `SCRAPE_PROXY` | Đọc qua dịch vụ proxy chống chặn bot. Riêng Shopee: ScraperAPI đòi gói "ultra premium" (tốn nhiều credit) nên nên dùng Shopee qua "Shop khác" (Serper) |
+| Walmart, iHerb, Coles, Coupang (trực tiếp) | | Cần `SCRAPE_PROXY` | Đọc qua proxy chống chặn bot. Asda, Boots, Carrefour, Chemist Warehouse, eBay, Shopee đã bỏ (qua proxy thường chỉ nhận trang chặn; Shopee cần gói ultra premium) — vẫn có qua "Shop khác" |
 
 ### Về các trang chặn bot (Walmart, Tesco, Amazon US…)
 

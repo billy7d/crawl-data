@@ -41,8 +41,13 @@ export const googleShopping = {
   needsKey: 'SERPER_API_KEY',
   limit: { concurrency: 3, gap: 100 },
   async search({ q, market, signal }) {
-    const d = await serper('shopping', { q, ...locale(market), num: 40 }, signal);
-    return (d.shopping || []).map((p) => ({
+    // Each page is one credit; deeper search reads more pages (page 2 adds ~30 offers from other retailers).
+    const pages = Math.min(3, Math.max(1, Number(process.env.SEARCH_DEPTH) || 2));
+    const res = await Promise.allSettled(Array.from({ length: pages }, (_, i) => serper('shopping', { q, ...locale(market), num: 40, ...(i ? { page: i + 1 } : {}) }, signal)));
+    if (res[0].status === 'rejected') throw res[0].reason;
+    const seen = new Set();
+    const all = res.flatMap((r) => (r.status === 'fulfilled' ? r.value.shopping || [] : [])).filter((p) => !seen.has(p.link) && seen.add(p.link));
+    return all.map((p) => ({
       title: p.title,
       url: p.link,
       image: p.imageUrl,

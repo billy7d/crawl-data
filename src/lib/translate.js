@@ -2,6 +2,7 @@
 // Used to search foreign markets in their own language and to translate foreign descriptions to Vietnamese.
 import { remember } from './cache.js';
 import { fetchJSON } from './http.js';
+import { BRANDS, fold } from './normalize.js';
 
 // The free endpoint rate-limits bursts, so calls go through a small semaphore.
 let running = 0;
@@ -68,9 +69,37 @@ function applyGlossary(q) {
 }
 
 // Vietnamese query -> search query for another market's language, keeping the baby-food context.
+// Brand names must never be translated ("nestle" → French "se nicher", "plum" → "prune"): take them out,
+// translate the rest, then put them back in front.
+// Product-format words shops use untranslated everywhere (Italian 'sbuffi' for 'puffs' finds nothing).
+const KEEP = ['puffs', 'puff', 'melts', 'yogurt melts', 'teethers', 'squeeze', 'bio'];
+const BRAND_WORDS = [...new Set([...BRANDS, ...KEEP])]
+  .map((b) => fold(b).split(/\s+/).map((w) => w.replace(/[^a-z0-9]/g, '')).filter(Boolean))
+  .filter((ws) => ws.length && ws.join('').length >= 3)
+  .sort((a, b) => b.length - a.length);
+export function splitBrands(q) {
+  const words = q.split(/\s+/).filter(Boolean);
+  const f = words.map((w) => fold(w).replace(/[^a-z0-9]/g, ''));
+  const used = new Array(words.length).fill(false);
+  const brands = [];
+  for (const bw of BRAND_WORDS) {
+    for (let i = 0; i + bw.length <= words.length; i++) {
+      if (used.slice(i, i + bw.length).some(Boolean) || !bw.every((w, k) => f[i + k] === w)) continue;
+      brands.push(words.slice(i, i + bw.length).join(' '));
+      for (let k = 0; k < bw.length; k++) used[i + k] = true;
+    }
+  }
+  return { brands, rest: words.filter((_, i) => !used[i]).join(' ') };
+}
+
 export async function translateQuery(q, lang) {
   const base = lang.split('-')[0];
   if (base === 'vi') return q;
+  const { brands, rest } = splitBrands(q);
+  if (brands.length) {
+    if (!rest.trim()) return brands.join(' ');
+    return `${brands.join(' ')} ${await translateQuery(rest, lang)}`.replace(/\s+/g, ' ').trim();
+  }
   const looksVi = /[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]/i.test(q);
   let en = q;
   if (looksVi) {

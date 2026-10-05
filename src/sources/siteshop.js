@@ -10,15 +10,15 @@ import { searxngWeb, braveWeb } from './metasearch.js';
 
 export const SITE_SHOPS = {
   vn: ['shopee.vn', 'bibomart.com.vn', 'avakids.com', 'bachhoaxanh.com', 'winmart.vn', 'nhathuoclongchau.com.vn', 'guardian.com.vn', 'hasaki.vn'],
-  us: ['walmart.com', 'iherb.com', 'amazon.com', 'kroger.com', 'costco.com', 'thrivemarket.com', 'cvs.com', 'walgreens.com', 'wholefoodsmarket.com'],
-  gb: ['tesco.com', 'boots.com', 'asda.com', 'ocado.com', 'superdrug.com', 'hollandandbarrett.com', 'amazon.co.uk', 'aldi.co.uk'],
-  au: ['coles.com.au', 'woolworths.com.au', 'chemistwarehouse.com.au', 'babybunting.com.au', 'aldi.com.au', 'priceline.com.au', 'iga.com.au'],
-  de: ['rossmann.de', 'mueller.de', 'amazon.de', 'rewe.de', 'babymarkt.de', 'edeka24.de', 'shop-apotheke.com'],
-  ca: ['walmart.ca', 'loblaws.ca', 'shoppersdrugmart.ca', 'well.ca', 'amazon.ca', 'metro.ca'],
-  it: ['esselunga.it', 'carrefour.it', 'amazon.it', 'conad.it', 'farmaciauno.it'],
-  es: ['carrefour.es', 'mercadona.es', 'elcorteingles.es', 'amazon.es', 'dia.es'],
-  nl: ['ah.nl', 'jumbo.com', 'kruidvat.nl', 'bol.com', 'etos.nl'],
-  fr: ['carrefour.fr', 'auchan.fr', 'monoprix.fr', 'aubert.com', 'e.leclerc', 'amazon.fr'],
+  us: ['walmart.com', 'target.com', 'iherb.com', 'amazon.com', 'kroger.com', 'costco.com', 'thrivemarket.com', 'cvs.com', 'walgreens.com', 'wholefoodsmarket.com', 'instacart.com', 'samsclub.com'],
+  gb: ['tesco.com', 'sainsburys.co.uk', 'asda.com', 'boots.com', 'ocado.com', 'waitrose.com', 'morrisons.com', 'superdrug.com', 'hollandandbarrett.com', 'amazon.co.uk', 'aldi.co.uk', 'iceland.co.uk'],
+  au: ['coles.com.au', 'woolworths.com.au', 'chemistwarehouse.com.au', 'babybunting.com.au', 'aldi.com.au', 'priceline.com.au', 'iga.com.au', 'amazon.com.au', 'harrisfarm.com.au', 'mydeal.com.au'],
+  de: ['dm.de', 'rossmann.de', 'mueller.de', 'rewe.de', 'edeka24.de', 'kaufland.de', 'babymarkt.de', 'windeln.de', 'shop-apotheke.com', 'docmorris.de', 'amazon.de', 'otto.de'],
+  ca: ['walmart.ca', 'loblaws.ca', 'realcanadiansuperstore.ca', 'shoppersdrugmart.ca', 'well.ca', 'voila.ca', 'sobeys.com', 'metro.ca', 'amazon.ca', 'londondrugs.com'],
+  it: ['esselunga.it', 'carrefour.it', 'conad.it', 'easycoop.com', 'amazon.it', 'farmaciauno.it', 'farmacosmo.it', 'efarma.com', 'prenatal.com', 'bimbostore.it', 'tigros.it'],
+  es: ['tienda.mercadona.es', 'carrefour.es', 'elcorteingles.es', 'alcampo.es', 'dia.es', 'supermercado.eroski.es', 'amazon.es', 'mifarma.es', 'promofarma.com', 'atida.com', 'condisline.com'],
+  nl: ['ah.nl', 'jumbo.com', 'plus.nl', 'kruidvat.nl', 'etos.nl', 'bol.com', 'prenatal.nl', 'dirk.nl', 'hoogvliet.com', 'amazon.nl'],
+  fr: ['carrefour.fr', 'auchan.fr', 'monoprix.fr', 'e.leclerc', 'intermarche.com', 'franprix.fr', 'chronodrive.com', 'houra.fr', 'cdiscount.com', 'aubert.com', 'newpharma.fr', 'pharma-gdd.com', 'cocooncenter.com', 'amazon.fr'],
   jp: ['amazon.co.jp', 'lohaco.yahoo.co.jp', 'shopping.yahoo.co.jp', 'akachan.jp', 'matsukiyococokara-online.com', 'iyec.omni7.jp'],
   kr: ['coupang.com', 'gmarket.co.kr', '11st.co.kr', 'ssg.com', 'kurly.com'],
   cn: ['tmall.com', 'jd.com', 'taobao.com', 'suning.com'],
@@ -29,7 +29,10 @@ export const SITE_SHOPS = {
   id: ['tokopedia.com', 'shopee.co.id', 'blibli.com', 'alfagift.id'],
 };
 
-const prettyHost = (h) => h.replace(/^(www|shop|shopping|groceries)\./, '');
+const prettyHost = (h) => h.replace(/^(www|shop|shopping|groceries|tienda|supermercado|courses)\./, '');
+const shopRow = (r) => ({ ...r, price: r.price || `${r.title} ${r.snippet}`.match(PRICE_IN_TEXT)?.[0] || null, seller: prettyHost(hostOf(r.url)) });
+// 1 = save credits, 2 = balanced (default), 3 = deep.
+export const searchDepth = () => Math.min(3, Math.max(1, Number(process.env.SEARCH_DEPTH) || 2));
 
 export default {
   id: 'siteshop',
@@ -42,7 +45,20 @@ export default {
   dedupe: true,
   async search({ q, market, signal }) {
     const sites = SITE_SHOPS[market];
-    const query = `${q} (${sites.map((s) => `site:${s}`).join(' OR ')})`;
+    // With Serper the sites are searched in small groups: in one big OR query the largest retailer takes all
+    // ten results (free plan: 10 per site: query). SEARCH_DEPTH sets the group size (more groups = more credits).
+    if (process.env.SERPER_API_KEY) {
+      const size = { 1: sites.length, 2: 4, 3: 2 }[searchDepth()] || 4;
+      const groups = [];
+      for (let i = 0; i < sites.length; i += size) groups.push(sites.slice(i, i + size));
+      const answers = await Promise.allSettled(groups.map((g) => serperWeb(`${q} (${g.map((x) => `site:${x}`).join(' OR ')})`, market, signal)));
+      if (answers.every((a) => a.status === 'rejected')) throw answers[0].reason;
+      const seen = new Set();
+      return answers.flatMap((a) => (a.status === 'fulfilled' ? a.value : []))
+        .filter((r) => sites.some((x) => hostOf(r.url) === x || hostOf(r.url).endsWith('.' + x)) && !seen.has(r.url) && seen.add(r.url))
+        .map(shopRow);
+    }
+    const query = `${q} (${sites.map((x) => `site:${x}`).join(' OR ')})`;
     // Most robust provider first: keyed APIs / self-hosted SearXNG, then DuckDuckGo (honours site:/OR well),
     // then Bing. Each failure or empty answer falls through to the next one.
     // A keyed provider (Serper/Brave) that answers is trusted even when empty: falling through to the free
@@ -66,6 +82,6 @@ export default {
       }
     }
     if (!rows.length && lastError) throw lastError;
-    return rows.map((r) => ({ ...r, price: r.price || `${r.title} ${r.snippet}`.match(PRICE_IN_TEXT)?.[0] || null, seller: prettyHost(hostOf(r.url)) }));
+    return rows.map(shopRow);
   },
 };

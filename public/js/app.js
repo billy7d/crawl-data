@@ -384,6 +384,7 @@ function startSearch(q, { fresh = $('#opt-fresh').checked } = {}) {
   S.translations = {};
   S.limit = PAGE;
   S.searching = true;
+  S.stopped = false;
   S.t0 = performance.now();
   S.doneMs = null;
   $('#q').value = q;
@@ -406,8 +407,9 @@ function startSearch(q, { fresh = $('#opt-fresh').checked } = {}) {
   $('#empty-state').hidden = true;
   $('#results-wrap').hidden = false;
   $('#status').hidden = false;
-  $('#search-btn').disabled = true;
-  $('#search-btn').textContent = 'Đang tìm…';
+  // The search button stays usable: a new search replaces this one (closing the stream stops it on the server).
+  $('#search-btn').textContent = 'Tìm mới';
+  $('#stop-btn').hidden = false;
   renderQuickLinks();
   if (S.tab !== 'results' && S.tab !== 'insights') switchTab('results');
 
@@ -457,12 +459,23 @@ function endSearch(interrupted = false) {
   S.es = null;
   if (!S.searching) return;
   S.searching = false;
-  $('#search-btn').disabled = false;
   $('#search-btn').textContent = 'Tìm kiếm';
+  $('#stop-btn').hidden = true;
   if (interrupted && S.doneMs == null) S.doneMs = Math.round(performance.now() - S.t0);
   renderStatus();
   scheduleRender(true);
-  enrichVisible();
+  if (!S.stopped) enrichVisible();
+}
+
+// Stop the running search: the server aborts its source requests when the stream closes; results so far stay.
+function stopSearch() {
+  if (!S.searching) return;
+  S.stopped = true;
+  S.runId++; // late detail answers of this run are ignored
+  S.enrichQueue = [];
+  for (const t of S.tasks.values()) if (t.status === 'queued' || t.status === 'running') t.status = 'stopped';
+  endSearch(true);
+  toast('Đã dừng tìm kiếm — giữ lại kết quả đã có');
 }
 
 function renderStatus() {
@@ -474,7 +487,7 @@ function renderStatus() {
   const secs = ((S.doneMs ?? performance.now() - S.t0) / 1000).toFixed(1);
   $('#status-text').innerHTML = S.searching
     ? `Đang tìm “<b>${esc(S.q)}</b>” trên ${tasks.length} nguồn… <b>${n}</b> sản phẩm sau ${secs}s${finished === tasks.length && tasks.length ? ' — đang lấy chi tiết sản phẩm' : ''}`
-    : `Tìm thấy <b>${n}</b> kết quả từ ${tasks.filter((t) => t.count).length}/${tasks.length} nguồn trong ${secs}s`
+    : `${S.stopped ? 'Đã dừng — giữ ' : 'Tìm thấy '}<b>${n}</b> kết quả từ ${tasks.filter((t) => t.count).length}/${tasks.length} nguồn trong ${secs}s`
       + (tasks.some((t) => ['error', 'cooldown', 'warn'].includes(t.status)) && !S.meta.sources.find((s) => s.id === 'gshop')?.enabled
         ? ' · <span class="muted">Một số nguồn bị chặn — </span><button type="button" class="hint-link" data-open-settings>thêm khóa miễn phí để ổn định hơn</button>'
         : '');
@@ -482,7 +495,7 @@ function renderStatus() {
   $('#task-chips').innerHTML = tasks.map((t) => {
     const detail = t.status === 'done' || t.status === 'warn'
       ? `${t.count} <span class="ms">${t.cached ? 'cache' : `${(t.ms / 1000).toFixed(1)}s`}</span>`
-      : t.status === 'error' || t.status === 'cooldown' ? '<span class="ms">lỗi</span>' : '';
+      : t.status === 'error' || t.status === 'cooldown' ? '<span class="ms">lỗi</span>' : t.status === 'stopped' ? '<span class="ms">đã dừng</span>' : '';
     const title = t.error || t.warn || (t.query ? `Từ khóa: ${t.query}` : '');
     return `<span class="task ${t.status}" title="${esc(title)}"><span class="dot"></span>${esc(label(t))} ${detail}</span>`;
   }).join('');
@@ -1309,7 +1322,7 @@ async function runImportCheck() {
   }
   S.imp.ctrl?.abort();
   const ctrl = new AbortController();
-  Object.assign(S.imp, { results: new Map(), running: true, total: items.length, importers: [], ctrl, t0: performance.now() });
+  Object.assign(S.imp, { stopped: false, results: new Map(), running: true, total: items.length, importers: [], ctrl, t0: performance.now() });
   renderImport();
   const slim = items.map((it) => ({
     id: it.id, title: it.title, brand: it.brand, image: it.image, url: it.url, country: it.country, market: it.market, gtin: it.gtin,
@@ -1446,12 +1459,11 @@ function renderImport() {
   $('#imp-tracked').innerHTML = trackedHtml();
   const counts = Object.fromEntries(Object.keys(IMP_CLASSES).map((k) => [k, all.filter((r) => r.class === k).length]));
   const secs = ((performance.now() - (S.imp.t0 || performance.now())) / 1000).toFixed(0);
-  const pendingN = all.filter((r) => r.pending?.length).length;
-  $('#imp-run').disabled = S.imp.running;
-  $('#imp-run').textContent = S.imp.running ? 'Đang phân tích…' : `Phân tích ${importCandidates().length} sản phẩm nước ngoài`;
+  const pendingN = S.imp.running ? all.filter((r) => r.pending?.length).length : 0;
+  $('#imp-run').textContent = S.imp.running ? 'Dừng phân tích' : `Phân tích ${importCandidates().length} sản phẩm nước ngoài`;
   $('#imp-status').innerHTML = !S.imp.total
     ? `<span>Bước 1: tìm sản phẩm với các thị trường nước ngoài (nút <b>Âu–Mỹ–Úc</b>). Bước 2: bấm <b>Phân tích</b> — app tìm từng sản phẩm trên các kênh Việt Nam và phân loại.</span>`
-    : `${S.imp.running ? '<span class="loading-dots">Đang kiểm tra</span>' : 'Đã kiểm tra'} <b>${all.length}</b>/${S.imp.total} sản phẩm${S.imp.running ? ` · ${secs}s` : ''}${pendingN ? ` · đang bổ sung dữ liệu chậm (Lazada, trang chi tiết) cho <b>${pendingN}</b> SP — bảng tự cập nhật` : ''}`;
+    : `${S.imp.running ? '<span class="loading-dots">Đang kiểm tra</span>' : S.imp.stopped ? 'Đã dừng — đã kiểm tra' : 'Đã kiểm tra'} <b>${all.length}</b>/${S.imp.total} sản phẩm${S.imp.running ? ` · ${secs}s` : ''}${pendingN ? ` · đang bổ sung dữ liệu chậm (Lazada, trang chi tiết) cho <b>${pendingN}</b> SP — bảng tự cập nhật` : ''}`;
   $('#imp-filters').innerHTML = all.length ? [['', `Tất cả (${all.length})`], ...Object.entries(IMP_CLASSES).map(([k, [label]]) => [k, `${label} (${counts[k]})`])]
     .map(([k, label]) => `<button type="button" class="chip" data-imp-filter="${k}" aria-pressed="${S.imp.filter === k}" title="${esc(IMP_CLASSES[k]?.[1] || '')}">${k ? `<span class="cls ${k}">●</span>` : ''}${esc(label)}</button>`).join('') : '';
   const rows = all.filter((r) => !S.imp.filter || r.class === S.imp.filter).sort((a, b) => impScore(b) - impScore(a));
@@ -1563,7 +1575,7 @@ function impRow(r) {
       ${p.rating || p.reviews ? `<div class="rate"><span class="star">★</span> ${fmtNum(p.rating, 1)}${p.reviews ? ` (${fmtCompact(p.reviews)} đánh giá)` : ''}</div>` : ''}</td>
     <td>${oppCell(r)}</td>
     <td><span class="cls ${r.class}">${esc(label)}</span>
-      <button class="btn small ghost" style="margin-left:4px" data-track="${esc(r.id)}" title="Lưu lịch sử lượt bán và tự kiểm tra lại định kỳ">${isTracked(r.id) ? '★ Đang theo dõi' : '☆ Theo dõi'}</button>${r.uncertain ? ' <span class="tag ad" title="Một số kênh VN chính không trả lời — kết luận có thể sai">chưa chắc</span>' : ''}${r.pending?.length ? ` <span class="tag" title="Đang chờ: ${esc(r.pending.join(', '))}"><span class="loading-dots">đang bổ sung</span></span>` : ''}<ul class="imp-reasons">${r.reasons.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></td>
+      <button class="btn small ghost" style="margin-left:4px" data-track="${esc(r.id)}" title="Lưu lịch sử lượt bán và tự kiểm tra lại định kỳ">${isTracked(r.id) ? '★ Đang theo dõi' : '☆ Theo dõi'}</button>${r.uncertain ? ' <span class="tag ad" title="Một số kênh VN chính không trả lời — kết luận có thể sai">chưa chắc</span>' : ''}${r.pending?.length && S.imp.running ? ` <span class="tag" title="Đang chờ: ${esc(r.pending.join(', '))}"><span class="loading-dots">đang bổ sung</span></span>` : ''}<ul class="imp-reasons">${r.reasons.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></td>
     <td class="small">${evidence}${matches}</td>
     <td class="c-price tnum">${p.priceVND ? fmtVND(p.priceVND) : '—'}<div class="muted small">VN: ${vn.minPriceVND ? fmtShortVND(vn.minPriceVND) + (vn.maxPriceVND > vn.minPriceVND ? `–${fmtShortVND(vn.maxPriceVND)}` : '') : '—'}</div></td>
   </tr>`;
@@ -1580,7 +1592,15 @@ function exportImport() {
 }
 
 function bindImport() {
-  $('#imp-run').addEventListener('click', runImportCheck);
+  $('#imp-run').addEventListener('click', () => {
+    // While running the button stops the check (rows already classified stay); otherwise it starts one.
+    if (!S.imp.running) return runImportCheck();
+    S.imp.ctrl?.abort();
+    S.imp.running = false;
+    S.imp.stopped = true;
+    renderImport();
+    toast('Đã dừng phân tích — giữ lại các dòng đã có kết luận');
+  });
   $('#imp-best').addEventListener('click', loadBestsellers);
   $('#imp-export').addEventListener('click', exportImport);
   $('#view-import').addEventListener('click', async (e) => {
@@ -1705,6 +1725,11 @@ function renderSettings() {
       <div class="set-row"><input type="number" name="SEARCH_CACHE_HOURS" min="0.5" max="168" step="0.5" value="${fields.SEARCH_CACHE_HOURS.value}" style="flex:0 1 120px" aria-label="Số giờ lưu tạm"> <span class="small muted">giờ</span></div>
     </div>
     <div class="set-card">
+      <div class="set-head"><h3>Độ phủ tìm kiếm (Google qua Serper)</h3></div>
+      <p class="muted small">Sâu hơn = nhiều trang bán và nhiều sản phẩm hơn ở mỗi thị trường (Google Shopping nhiều trang, tìm theo nhóm nhỏ trang bán), nhưng tốn nhiều lượt Serper hơn. Ước tính lượt Serper mỗi thị trường cho một lần tìm: Tiết kiệm ≈ 3 · Cân bằng ≈ 6 · Sâu ≈ 10.</p>
+      <div class="set-row"><select name="SEARCH_DEPTH" aria-label="Độ phủ tìm kiếm" style="flex:0 1 220px">${[[1, 'Tiết kiệm'], [2, 'Cân bằng (mặc định)'], [3, 'Sâu']].map(([v, l]) => `<option value="${v}" ${(fields.SEARCH_DEPTH?.value ?? 2) === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+    </div>
+    <div class="set-card">
       <div class="set-head"><h3>Chu kỳ kiểm tra lượt bán</h3></div>
       <p class="muted small">Sản phẩm đang theo dõi (tab Cơ hội nhập khẩu) được kiểm tra lại tự động sau mỗi khoảng này, khi app đang chạy.</p>
       <div class="set-row"><input type="number" name="SALES_CHECK_HOURS" min="1" max="720" step="1" value="${fields.SALES_CHECK_HOURS?.value ?? 24}" style="flex:0 1 120px" aria-label="Số giờ giữa hai lần kiểm tra"> <span class="small muted">giờ</span></div>
@@ -1733,6 +1758,7 @@ function settingsPayload(form, only) {
     }
   }
   if (!only && Number(v('SEARCH_CACHE_HOURS')) !== settingsData.fields.SEARCH_CACHE_HOURS.value) body.SEARCH_CACHE_HOURS = v('SEARCH_CACHE_HOURS');
+  if (!only && settingsData.fields.SEARCH_DEPTH && Number(v('SEARCH_DEPTH')) !== settingsData.fields.SEARCH_DEPTH.value) body.SEARCH_DEPTH = v('SEARCH_DEPTH');
   if (!only && Number(v('SALES_CHECK_HOURS')) !== settingsData.fields.SALES_CHECK_HOURS.value) body.SALES_CHECK_HOURS = v('SALES_CHECK_HOURS');
   return body;
 }
@@ -1863,6 +1889,7 @@ function applyTheme(t) {
 // ---------------------------------------------------------------- events
 
 function bindEvents() {
+  $('#stop-btn').addEventListener('click', stopSearch);
   $('#search-form').addEventListener('submit', (e) => {
     e.preventDefault();
     S.trOverride = {};
