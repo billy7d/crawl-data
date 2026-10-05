@@ -10,7 +10,7 @@
     "test:sources": "node scripts/test-sources.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13"
   },
   "license": "MIT",
   "dependencies": {

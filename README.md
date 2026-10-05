@@ -4,7 +4,7 @@ Công cụ web miễn phí giúp shop đồ ăn dặm **tìm sản phẩm mục 
 
 ## Chạy app
 
-Yêu cầu Node.js 20 trở lên (máy hiện có Node 24).
+Yêu cầu **Node.js 22.13 trở lên** (app dùng SQLite tích hợp sẵn của Node). Chạy được trên Windows, macOS và Linux.
 
 ```bash
 npm install
@@ -16,7 +16,41 @@ npm start
 
 Mở trình duyệt tại **http://localhost:3000**. Không cần tài khoản hay API key nào.
 
-**Cách nhanh trên Windows:** nhấp đúp file `chay-app.bat`. File này tự cài thư viện ở lần đầu, chạy app và mở trình duyệt khi app sẵn sàng. Nếu app đã chạy sẵn, nó chỉ mở trình duyệt. Đóng cửa sổ đen (hoặc bấm Ctrl+C) để tắt app.
+### Windows
+
+Nhấp đúp file `chay-app.bat`. File này tự cài thư viện ở lần đầu, chạy app và mở trình duyệt khi app sẵn sàng. Nếu app đã chạy sẵn, nó chỉ mở trình duyệt. Đóng cửa sổ đen (hoặc bấm Ctrl+C) để tắt app.
+
+### macOS
+
+1. Cài Node.js (một lần): tải bản **LTS** (file `.pkg`) tại https://nodejs.org, hoặc nếu có Homebrew thì chạy lệnh dưới đây trong Terminal.
+
+   ```bash
+   brew install node
+   ```
+
+2. Tải dự án về (một lần):
+
+   ```bash
+   git clone https://github.com/billy7d/crawl-data.git
+   ```
+
+3. Trong Finder, mở thư mục `crawl-data` và **nhấp đúp `chay-app.command`**. Terminal mở ra, lần đầu tự cài thư viện (~1 phút), chạy app và mở trình duyệt. Đóng cửa sổ Terminal (hoặc Ctrl+C) để tắt app.
+
+4. (Tuỳ chọn) Nhấp đúp `tao-app-macos.command` để tạo **Ăn Dặm Radar.app** trong thư mục Ứng dụng của bạn — mở bằng Launchpad/Spotlight hoặc kéo vào Dock như app bình thường.
+
+**Nếu macOS chặn mở file** ("không thể mở vì không xác định được nhà phát triển" — thường gặp khi tải ZIP thay vì `git clone`): nhấp chuột phải vào file → **Mở** → **Mở**. Nếu báo không có quyền chạy, mở Terminal trong thư mục dự án và chạy lệnh dưới đây một lần.
+
+```bash
+chmod +x chay-app.command tao-app-macos.command
+```
+
+**Khóa API và dữ liệu** (`.env`, thư mục `data/`) chỉ nằm trên máy đang chạy, không có trên GitHub. Trên Mac mới, nhập lại khóa trong ⚙ Cài đặt nguồn — hoặc chép file `.env` (và `data/` nếu muốn giữ lịch sử, danh sách theo dõi) từ máy cũ sang thư mục dự án.
+
+Cập nhật bản mới (trong thư mục dự án):
+
+```bash
+git pull
+```
 
 ## Tính năng
 
