@@ -5,7 +5,7 @@ import { throttled } from './limiter.js';
 export const searchTtl = () => Number(process.env.SEARCH_CACHE_HOURS || 6) * 3600e3;
 
 export async function runSearch(src, market, query, { signal, fresh = false } = {}) {
-  const key = `s:v2:${src.id}:${market}:${query.toLowerCase()}`;
+  const key = `s:v3:${src.id}:${market}:${query.toLowerCase()}`;
   if (fresh) del(key);
   const lim = src.limit || {};
   const limitKey = lim.perMarket ? `${src.id}:${market}` : lim.key || src.id;

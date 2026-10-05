@@ -5,8 +5,9 @@ import tiki from './tiki.js';
 import lazada from './lazada.js';
 import off from './openfoodfacts.js';
 import siteshop from './siteshop.js';
-import { concung, kidsplaza, rakuten, proxied, monoprix } from './stores.js';
+import { concung, kidsplaza, proxied, monoprix } from './stores.js';
 import { auchan, chronodrive, carrefour } from './fr-shops.js';
+import { moreShops } from './more-shops.js';
 import { amazon, target, sainsburys, tesco, waitrose, morrisons, woolworths, dm, fairprice } from './global-shops.js';
 import { google, googleShopping } from './serper.js';
 import { searxng, brave } from './metasearch.js';
@@ -15,7 +16,7 @@ export const SOURCES = [
   // Vietnam
   tiki, lazada, concung, kidsplaza,
   // Foreign retailers (direct)
-  amazon, target, tesco, sainsburys, waitrose, morrisons, woolworths, dm, fairprice, rakuten, monoprix, auchan, chronodrive, carrefour, bingshop,
+  amazon, target, tesco, sainsburys, waitrose, morrisons, woolworths, dm, fairprice, monoprix, auchan, chronodrive, carrefour, ...moreShops, bingshop,
   // Retailers that block bots: via search-engine index, or via the optional scraping proxy
   siteshop, ...proxied,
   // Search engines & product database

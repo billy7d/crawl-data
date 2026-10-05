@@ -54,11 +54,19 @@ Mở trình duyệt tại **http://localhost:3000**. Không cần tài khoản h
 | Woolworths | AU | API | |
 | dm-drogerie | DE | API | |
 | FairPrice | SG | API | |
-| Rakuten | JP | Trang tìm kiếm | |
 | Monoprix | FR | Trang tìm kiếm | Siêu thị Pháp, đọc trực tiếp |
 | Carrefour | FR | Qua `SCRAPE_PROXY` (IP Pháp) | Đọc dữ liệu gốc của trang: giá, giá/kg, **EAN**, quy cách, danh mục, ảnh gốc. Chặn IP ngoài Pháp nên đi qua proxy với `country_code=fr` (1 credit/lần, tự thử gói premium nếu bị chặn) |
 | Auchan | FR | Trang tìm kiếm (trực tiếp) | Tên, ảnh, link, điểm sao. Auchan chỉ hiện giá sau khi chọn cửa hàng nên không có giá |
 | Chronodrive | FR | Qua `SCRAPE_PROXY` | Tên, giá, ảnh, link |
+| Shop Apotheke | DE | Trang tìm kiếm | Nhà thuốc online lớn nhất Đức (HiPP, Alete, Bebivita…) |
+| Farmaè, Farmacia Igea, Amica Farmacia | IT | Trang tìm kiếm | Nhà thuốc online Ý — bán phần lớn đồ ăn dặm (Plasmon, Mellin, HiPP) |
+| Aldi UK | GB | Trang tìm kiếm | Thương hiệu + tên + quy cách, giá, giá/100g |
+| Yahoo!ショッピング | JP | Qua `SCRAPE_PROXY` (IP Nhật) | |
+| Rakuten | JP | Trang tìm kiếm | 45 SP/trang: giá, điểm sao, số đánh giá, tên shop |
+| SSG.COM | KR | Qua `SCRAPE_PROXY` (IP Hàn) | Sàn của Shinsegae/E-mart |
+| Well.ca | CA | Trang tìm kiếm | |
+| Walmart Canada, Loblaws | CA | Qua `SCRAPE_PROXY` (IP Canada) | |
+| Kroger | US | Qua `SCRAPE_PROXY` (IP Mỹ) | Tên, giá, quy cách, **mã UPC** |
 | Bing Shopping | US, UK, AU, DE, FR | Trang tìm kiếm | Giá từ nhiều shop |
 | **Shop khác (qua search engine)** | Mọi thị trường | Tìm `site:` qua Serper (theo nhóm nhỏ trang bán), dự phòng DuckDuckGo/Bing | 10–14 trang bán mỗi thị trường: siêu thị, nhà thuốc online, cửa hàng mẹ & bé (vd. Pháp: Carrefour, Auchan, Monoprix, Leclerc, Intermarché, Franprix, Chronodrive, Houra, Cdiscount, Aubert, Newpharma, Pharma GDD, Cocooncenter, Amazon). Lấy link và giá trong trích đoạn |
 | Bing, DuckDuckGo | Mọi thị trường | Trang kết quả | Bài viết, review, trang hãng |

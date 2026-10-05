@@ -3,7 +3,7 @@
 import { fetchText } from '../lib/http.js';
 import { extractListing } from '../lib/extract.js';
 
-function storeSource({ id, name, group, markets, currency, searchUrl, timeout = 8000, lang, proxy = 'fallback', needsKey, filterIrrelevant }) {
+export function storeSource({ id, name, group, markets, currency, searchUrl, timeout = 8000, lang, proxy = 'fallback', proxyExtra, proxyTimeout, needsKey, filterIrrelevant, min }) {
   return {
     id,
     filterIrrelevant,
@@ -15,8 +15,8 @@ function storeSource({ id, name, group, markets, currency, searchUrl, timeout = 
     needsKey,
     async search({ q, signal }) {
       const url = searchUrl(encodeURIComponent(q));
-      const { text, url: finalUrl } = await fetchText(url, { signal, timeout, lang, proxy });
-      return extractListing(text, finalUrl).map((p) => ({
+      const { text, url: finalUrl } = await fetchText(url, { signal, timeout, lang, proxy, proxyExtra, proxyTimeout });
+      return extractListing(text, finalUrl, min ? { min } : undefined).map((p) => ({
         ...p,
         currency: p.currency || currency,
         seller: name,
@@ -56,17 +56,6 @@ export const proxied = [
   viaProxy('coles', 'Coles', ['au'], 'AUD', 'en-AU,en;q=0.9', (q) => `https://www.coles.com.au/search/products?q=${q}`),
   viaProxy('coupang', 'Coupang', ['kr'], 'KRW', 'ko-KR,ko;q=0.9', (q) => `https://www.coupang.com/np/search?q=${q}`),
 ];
-
-export const rakuten = storeSource({
-  id: 'rakuten',
-  name: 'Rakuten',
-  group: 'Sàn TMĐT',
-  markets: ['jp'],
-  currency: 'JPY',
-  timeout: 10000,
-  lang: 'ja-JP,ja;q=0.9,en;q=0.5',
-  searchUrl: (q) => `https://search.rakuten.co.jp/search/mall/${q}/`,
-});
 
 // Monoprix (France): server-rendered search page with schema.org data, readable without a proxy.
 export const monoprix = storeSource({
