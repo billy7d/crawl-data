@@ -1,7 +1,7 @@
 // Shops whose search pages are JavaScript apps backed by a public search service, or whose pages embed the
 // product data as JSON. The pages themselves are blocked for direct requests from many IPs (so they go through
 // SCRAPE_PROXY when needed), but the search services answer directly:
-//   • Prenatal (IT)  — Meilisearch      • eFarma (IT) — Algolia (Magento extension)
+//   • Prenatal (IT)  — Meilisearch      • eFarma (IT), Asda and Boots (UK) — Algolia
 //   • Shoppers Drug Mart (CA) — Next.js page data      • Lotte ON (KR) — product JSON in the page
 //   • REWE (DE) — server-rendered tiles (prices depend on the chosen market, so none)
 // The search services need a search-only key that the shop's own page hands to every visitor. It is read from
@@ -153,6 +153,126 @@ export const efarma = {
   },
 };
 
+// ---------------------------------------------------------------- Asda (Algolia)
+
+export const readAsdaConfig = (html) => {
+  const m = html.match(/"algolia":{"appId":"([^"]+)","searchAPIKey":"([^"]+)","writeAPIKey":"[^"]*","productsIndex":"([^"]+)"/);
+  return m ? { app: m[1], key: m[2], index: m[3] } : null;
+};
+
+const slug = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+const asdaJSON = (v) => {
+  try {
+    return typeof v === 'string' ? JSON.parse(v) : v || {};
+  } catch {
+    return {};
+  }
+};
+
+export function parseAsda(hits) {
+  return hits.filter((h) => h?.NAME && h.CIN && h.DISPLAY_ONLINE !== 'false').map((h) => {
+    const prices = asdaJSON(h.PRICES);
+    const p = prices.EN || Object.values(prices)[0] || {};
+    const aisle = asdaJSON(h.PRIMARY_TAXONOMY).AISLE_NAME || asdaJSON(h.PRIMARY_TAXONOMY).DEPT_NAME || 'groceries';
+    const name = clean([h.BRAND, h.NAME].filter(Boolean).filter((x, i, a) => i === 0 || !String(h.NAME).toLowerCase().startsWith(String(a[0]).toLowerCase())).join(' '));
+    const lifestyles = asdaJSON(h.LIFESTYLES);
+    return {
+      title: name,
+      url: `https://www.asda.com/groceries/product/${slug(aisle)}/${slug(name).replace(/-+/g, '-').replace(/^-|-$/g, '')}/${h.CIN}`,
+      image: h.IMAGE_ID ? `https://asdagroceries.scene7.com/is/image/asdagroceries/${h.IMAGE_ID}?$ProdListProd$` : null,
+      price: p.PRICE ?? null,
+      currency: 'GBP',
+      brand: h.BRAND || null,
+      rating: Number(h.AVG_RATING) > 0 ? Math.round(Number(h.AVG_RATING) * 10) / 10 : null,
+      reviews: Number(h.RATING_COUNT) || null,
+      snippet: [h.PACK_SIZE, p.PRICEPERUOMFORMATTED].filter(Boolean).join(' · ') || null,
+      seller: 'Asda',
+      sponsored: String(h.IS_SPONSORED) === 'true',
+      extra: { lifestyles: Array.isArray(lifestyles) ? lifestyles : [] },
+    };
+  });
+}
+
+export const asda = {
+  id: 'asda',
+  name: 'Asda',
+  kind: 'shop',
+  group,
+  markets: ['gb'],
+  filterIrrelevant: true,
+  limit: { concurrency: 2, gap: 200 },
+  async search({ q, signal }) {
+    const cfg = () => pageConfig('asda', 'https://www.asda.com/groceries/search/baby', readAsdaConfig, { lang: 'en-GB,en;q=0.9', signal, proxyExtra: '&country_code=uk' });
+    const d = await withConfig('asda', cfg, async ({ app, key, index }) => {
+      const res = await request(`https://${app}-dsn.algolia.net/1/indexes/${encodeURIComponent(index)}/query`, {
+        method: 'POST', signal, timeout: 10000, accept: 'application/json',
+        headers: { 'X-Algolia-Application-Id': app, 'X-Algolia-API-Key': key, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: q, hitsPerPage: 40 }),
+      });
+      return res.json();
+    });
+    return parseAsda(d.hits || []);
+  },
+};
+
+// ---------------------------------------------------------------- Boots (Algolia)
+
+export const readBootsConfig = (html) => {
+  const m = html.match(/algoliaConfig=\{appID:"([^"]+)",APIKey:"([^"]+)",productIndex:"([^"]+)"/);
+  return m ? { app: m[1], key: m[2], index: m[3], filters: html.match(/defaultFilter:"([^"]+)"/)?.[1] || '' } : null;
+};
+
+export function parseBoots(hits) {
+  return hits.filter((h) => h?.offerName && h.actionURL).map((h) => {
+    const price = Number(h.currentPrice) || null;
+    const regular = Number(h.regularPrice) || null;
+    const attrs = (() => {
+      try {
+        return JSON.parse(h.productAttributes || '{}');
+      } catch {
+        return {};
+      }
+    })();
+    return {
+      title: clean(h.offerName),
+      url: `https://www.boots.com${h.actionURL}`,
+      image: h.referenceImageURL || h.thumbnailImage || null,
+      price,
+      originalPrice: regular && price && regular > price ? regular : null,
+      currency: 'GBP',
+      brand: h.brand || null,
+      gtin: h.upc || null,
+      rating: Number(h.numberOfReviews) > 0 ? Math.round(Number(h.averageReviewScore) * 10) / 10 || null : null,
+      reviews: Number(h.numberOfReviews) || null,
+      snippet: [h.ppuVolume, h.pricePerUnit, attrs.suitable_from ? `từ ${attrs.suitable_from}` : ''].filter(Boolean).join(' · ') || null,
+      seller: 'Boots',
+      extra: { inStock: h.inStock === true || h.inStock === 'true' },
+    };
+  });
+}
+
+export const boots = {
+  id: 'boots',
+  name: 'Boots',
+  kind: 'shop',
+  group,
+  markets: ['gb'],
+  filterIrrelevant: true,
+  limit: { concurrency: 2, gap: 200 },
+  async search({ q, signal }) {
+    const cfg = () => pageConfig('boots', 'https://www.boots.com/sitesearch?searchTerm=baby', readBootsConfig, { lang: 'en-GB,en;q=0.9', signal, proxyExtra: '&country_code=uk' });
+    const d = await withConfig('boots', cfg, async ({ app, key, index, filters }) => {
+      const res = await request(`https://${app}-dsn.algolia.net/1/indexes/${encodeURIComponent(index)}/query`, {
+        method: 'POST', signal, timeout: 10000, accept: 'application/json',
+        headers: { 'X-Algolia-Application-Id': app, 'X-Algolia-API-Key': key, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: q, hitsPerPage: 40, ...(filters ? { filters } : {}) }),
+      });
+      return res.json();
+    });
+    return parseBoots(d.hits || []);
+  },
+};
+
 // ---------------------------------------------------------------- Shoppers Drug Mart (Next.js data)
 
 export function parseShoppers(html) {
@@ -291,4 +411,4 @@ export const rewe = {
   },
 };
 
-export const apiShops = [prenatal, efarma, shoppers, lotteon, rewe];
+export const apiShops = [prenatal, efarma, asda, boots, shoppers, lotteon, rewe];

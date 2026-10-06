@@ -97,6 +97,8 @@ git pull
 | Farmaè, Farmacia Igea, Amica Farmacia | IT | Trang tìm kiếm | Nhà thuốc online Ý — bán phần lớn đồ ăn dặm (Plasmon, Mellin, HiPP) |
 | Prenatal | IT | API tìm kiếm công khai (Meilisearch) | Giá, **tổng lượt bán**, điểm sao, thương hiệu, EAN, mô tả. Khóa tìm kiếm đọc từ trang (qua proxy 1 lần, lưu 30 ngày) |
 | eFarma | IT | API tìm kiếm công khai (Algolia) | Giá, **EAN**, **thành phần**, lượt bán, thương hiệu. Khóa đọc từ trang giống Prenatal |
+| Asda | GB | API tìm kiếm công khai (Algolia) | Giá, giá/kg, điểm sao, quy cách, nhãn dinh dưỡng. Khóa đọc từ cấu hình công khai của trang (qua proxy 1 lần, lưu 30 ngày) |
+| Boots | GB | API tìm kiếm công khai (Algolia) | Giá, **UPC**, điểm sao, số đánh giá, độ tuổi phù hợp. Khóa đọc từ trang như Asda |
 | REWE | DE | Qua `SCRAPE_PROXY` (IP Đức) | Tên, ảnh, link; **không có giá** (REWE chỉ hiện giá sau khi chọn cửa hàng) |
 | Shoppers Drug Mart | CA | Qua `SCRAPE_PROXY` (IP Canada) | Dữ liệu Next.js của trang: giá, thương hiệu, sao, khuyến mãi |
 | Lotte ON | KR | Qua `SCRAPE_PROXY` (IP Hàn) | Dữ liệu sản phẩm nhúng trong trang: giá, giảm giá, sao |
@@ -115,7 +117,7 @@ git pull
 | Google, Google Shopping | Mọi thị trường | Cần `SERPER_API_KEY` | **Khuyên dùng:** Google Shopping gom giá từ gần như mọi shop |
 | SearXNG | Mọi thị trường | Cần `SEARXNG_URL` | Meta-search tự host: Google + Bing + DDG + Brave + Qwant |
 | Brave Search | Mọi thị trường | Cần `BRAVE_API_KEY` | |
-| Walmart, iHerb, Coles, Coupang (trực tiếp) | | Cần `SCRAPE_PROXY` | Đọc qua proxy chống chặn bot. Asda, Boots, Chemist Warehouse, eBay, Shopee đã bỏ (qua proxy thường chỉ nhận trang chặn; Shopee cần gói ultra premium) — vẫn có qua "Shop khác" |
+| Walmart, iHerb, Coles, Coupang (trực tiếp) | | Cần `SCRAPE_PROXY` | Đọc qua proxy chống chặn bot. Chemist Warehouse, eBay, Shopee đã bỏ (qua proxy thường chỉ nhận trang chặn; Shopee cần gói ultra premium). Asda và Boots đọc qua API tìm kiếm riêng (xem bảng trên) — vẫn có qua "Shop khác" |
 
 ### Về các trang chặn bot (Walmart, Tesco, Amazon US…)
 
@@ -133,7 +135,7 @@ Các chuỗi bán lẻ lớn dùng hệ thống chống bot (Akamai, PerimeterX,
    docker compose -f searxng/docker-compose.yml up -d
    ```
    rồi đặt `SEARXNG_URL=http://localhost:8888`.
-3. **`SCRAPE_PROXY`** (ScraperAPI, ScrapingBee, ZenRows…): mở khoá cào trực tiếp Walmart, iHerb, Coles, Carrefour, Kroger… (Shopee và Boots không đọc được ổn định, xem mục Tình trạng nguồn dữ liệu) và tự dùng làm phương án dự phòng khi Amazon/Tesco chặn. Trong Cài đặt nguồn chỉ cần chọn nhà cung cấp và dán API key.
+3. **`SCRAPE_PROXY`** (ScraperAPI, ScrapingBee, ZenRows…): mở khoá cào trực tiếp Walmart, iHerb, Coles, Carrefour, Kroger… (Shopee không đọc được ổn định, xem mục Tình trạng nguồn dữ liệu) và tự dùng làm phương án dự phòng khi Amazon/Tesco chặn. Trong Cài đặt nguồn chỉ cần chọn nhà cung cấp và dán API key.
 
 Cài đặt chỉ chỉnh được từ chính máy chạy app. Nếu đưa app lên máy chủ, đặt thêm `SETTINGS_TOKEN` trong `.env` để quản trị từ xa.
 
@@ -163,7 +165,7 @@ Các nguồn dưới đây được thử theo ba cách: truy cập thẳng, qua
 
 Lazada, Carrefour (FR), Chronodrive (FR), REWE (DE), Yahoo!ショッピング (JP), SSG.COM, Lotte ON (KR), Walmart Canada, Loblaws, Shoppers Drug Mart (CA), Kroger (US), Walmart, iHerb, Coles, Coupang.
 
-**Prenatal và eFarma (IT)** dùng proxy đúng 1 lần để đọc khóa tìm kiếm công khai từ trang, rồi lưu 30 ngày; sau đó tìm trực tiếp, không tốn credit. Khi dịch vụ từ chối khóa (đổi khóa), app tự đọc lại. Amazon thường đọc thẳng được, bị chặn thì tự chuyển qua proxy.
+**Prenatal, eFarma (IT), Asda, Boots (UK)** dùng proxy đúng 1 lần để đọc khóa tìm kiếm công khai từ trang, rồi lưu 30 ngày; sau đó tìm trực tiếp, không tốn credit. Khi dịch vụ từ chối khóa (đổi khóa), app tự đọc lại. Amazon thường đọc thẳng được, bị chặn thì tự chuyển qua proxy.
 
 **Proxy hết lượt:** gói miễn phí của ScraperAPI chỉ có 5.000 credit/tháng; Lazada dùng gói premium nên tốn khoảng 10 credit mỗi lần. Khi nhà cung cấp báo hết lượt, app tự ngừng gọi proxy 6 giờ, các nguồn trên báo lỗi ngay kèm lý do (thanh trạng thái và ⚙ Cài đặt có cảnh báo), còn các nguồn không cần proxy vẫn chạy. Lưu khóa mới trong ⚙ Cài đặt thì app thử lại ngay. Tại thời điểm kiểm tra, gói của người phát triển đã hết lượt tháng 10 (được cấp lại ngày 03/11).
 
@@ -175,25 +177,24 @@ Các trang này trả mã 403/202, captcha hoặc trang thử thách khi truy c�
 |---|---|---|
 | Pháp | Cora, Intermarché, Franprix | Google Shopping, "Shop khác" |
 | Đức | Kaufland | Google Shopping, "Shop khác", Amazon |
-| Ý | Carrefour.it, Iper | Google Shopping, "Shop khác", Amazon |
-| Anh | Holland & Barrett, Ocado | Google Shopping, "Shop khác" |
+| Ý | Carrefour.it, Iper, Farmaciauno (Cloudflare "Attention Required") | Google Shopping, "Shop khác", Amazon |
+| Anh | Holland & Barrett, Ocado, Iceland ("Access Denied" cả khi mở bằng trình duyệt thật) | Google Shopping, "Shop khác" |
 | Hàn | Gmarket, Naver Shopping | Coupang, SSG, 11번가, Kurly |
 | Canada | Voilà | Google Shopping, "Shop khác" |
-| Mỹ | Walgreens | Google Shopping, "Shop khác" |
+| Mỹ | Walgreens, Thrive Market (CloudFront báo lỗi), CVS (chỉ cho IP trong nước Mỹ) | Google Shopping, "Shop khác" |
 | Việt Nam | Shopee (cần gói "ultra premium" của ScraperAPI, rất tốn credit) | Google Shopping, "Shop khác" (có giá, không có lượt bán) |
 
 ### Tải được qua proxy nhưng chưa có bộ đọc dữ liệu
 
-Phân tích HTML đã lưu của từng trang cho thấy sản phẩm **không có trong HTML**: trang chỉ dựng kết quả bằng JavaScript sau khi tải (hoặc gọi một API cần khóa/phiên riêng chưa tìm được). Muốn đọc cần proxy có dựng JavaScript (tốn nhiều credit hơn) hoặc tìm ra API của từng trang.
+Các trang này tải được qua proxy nhưng sản phẩm không có trong HTML, hoặc chưa kiểm tra được cấu trúc. Đã thử mở bằng trình duyệt thật (có chạy JavaScript) để tìm API của trang; chỉ những trang dùng dịch vụ tìm kiếm công khai (Algolia, Meilisearch) mới đọc được, như Asda, Boots, Prenatal, eFarma.
 
 | Thị trường | Trang | Ghi chú |
 |---|---|---|
-| Anh | Boots, Asda, Iceland | Kết quả dựng bằng JavaScript; không thấy API công khai nào trong trang |
-| Mỹ | CVS, Thrive Market | CVS chỉ có khung chờ (shimmer); Thrive không có dữ liệu tìm kiếm trong HTML |
 | Đức | windeln.de | Tìm kiếm trả về trang thương hiệu/danh mục, không phải kết quả |
 | Đức | DocMorris | Đọc được nhưng trả nhiều sản phẩm không liên quan (thuốc) nên đã tắt |
-| Ý | Farmaciauno | Sản phẩm không có trong HTML (dựng bằng JavaScript) |
 | Pháp | Super U, Newpharma | Tải được qua proxy nhưng chưa phân tích được cấu trúc (HTML chưa được lưu lại để kiểm tra) |
+
+Proxy có dựng JavaScript (ScraperAPI `render=true`, truyền được qua `proxyExtra`) tốn khoảng 10 credit mỗi lần và không vượt được chống bot, nên chưa dùng.
 
 ### Chưa kiểm tra được rõ
 
@@ -219,6 +220,7 @@ Kết quả lần thử không kết luận được (lỗi 404 do đoán sai đ
 ## Nhật ký cập nhật
 
 **06/10/2026**
+- Thêm **Asda** và **Boots** (Anh) qua API Algolia công khai của chính trang (tìm ra bằng cách mở trang trong trình duyệt thật): Asda có giá, sao, quy cách; Boots có UPC, giá, đánh giá.
 - Bộ đọc mới cho các trang tải được qua proxy: **Prenatal** (Meilisearch) và **eFarma** (Algolia) qua API tìm kiếm công khai của chính trang (có giá, EAN, lượt bán, thành phần), **Shoppers Drug Mart** (dữ liệu Next.js), **Lotte ON** (JSON nhúng), **REWE** (thẻ sản phẩm, không giá). Viết và kiểm tra trên HTML đã lưu vì proxy đã hết lượt.
 - Đọc trực tiếp **Kurly**, **11번가** (API công khai của chính trang), **E.Leclerc** (HTML).
 - Phát hiện proxy hết lượt: tạm ngừng gọi proxy, báo rõ trên thanh trạng thái và Cài đặt.
