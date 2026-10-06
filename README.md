@@ -95,6 +95,11 @@ git pull
 | E.Leclerc | FR | Trang tìm kiếm | Tên, giá, giá/kg, thương hiệu, **EAN** |
 | Shop Apotheke | DE | Trang tìm kiếm | Nhà thuốc online lớn nhất Đức (HiPP, Alete, Bebivita…) |
 | Farmaè, Farmacia Igea, Amica Farmacia | IT | Trang tìm kiếm | Nhà thuốc online Ý — bán phần lớn đồ ăn dặm (Plasmon, Mellin, HiPP) |
+| Prenatal | IT | API tìm kiếm công khai (Meilisearch) | Giá, **tổng lượt bán**, điểm sao, thương hiệu, EAN, mô tả. Khóa tìm kiếm đọc từ trang (qua proxy 1 lần, lưu 30 ngày) |
+| eFarma | IT | API tìm kiếm công khai (Algolia) | Giá, **EAN**, **thành phần**, lượt bán, thương hiệu. Khóa đọc từ trang giống Prenatal |
+| REWE | DE | Qua `SCRAPE_PROXY` (IP Đức) | Tên, ảnh, link; **không có giá** (REWE chỉ hiện giá sau khi chọn cửa hàng) |
+| Shoppers Drug Mart | CA | Qua `SCRAPE_PROXY` (IP Canada) | Dữ liệu Next.js của trang: giá, thương hiệu, sao, khuyến mãi |
+| Lotte ON | KR | Qua `SCRAPE_PROXY` (IP Hàn) | Dữ liệu sản phẩm nhúng trong trang: giá, giảm giá, sao |
 | Aldi UK | GB | Trang tìm kiếm | Thương hiệu + tên + quy cách, giá, giá/100g |
 | Yahoo!ショッピング | JP | Qua `SCRAPE_PROXY` (IP Nhật) | |
 | Rakuten | JP | Trang tìm kiếm | 45 SP/trang: giá, điểm sao, số đánh giá, tên shop |
@@ -156,7 +161,9 @@ Các nguồn dưới đây được thử theo ba cách: truy cập thẳng, qua
 
 ### Chỉ chạy khi có `SCRAPE_PROXY` còn lượt
 
-Lazada, Carrefour (FR), Chronodrive (FR), Yahoo!ショッピング (JP), SSG.COM (KR), Walmart Canada, Loblaws (CA), Kroger (US), Walmart, iHerb, Coles, Coupang. Amazon thường đọc thẳng được, bị chặn thì tự chuyển qua proxy.
+Lazada, Carrefour (FR), Chronodrive (FR), REWE (DE), Yahoo!ショッピング (JP), SSG.COM, Lotte ON (KR), Walmart Canada, Loblaws, Shoppers Drug Mart (CA), Kroger (US), Walmart, iHerb, Coles, Coupang.
+
+**Prenatal và eFarma (IT)** dùng proxy đúng 1 lần để đọc khóa tìm kiếm công khai từ trang, rồi lưu 30 ngày; sau đó tìm trực tiếp, không tốn credit. Khi dịch vụ từ chối khóa (đổi khóa), app tự đọc lại. Amazon thường đọc thẳng được, bị chặn thì tự chuyển qua proxy.
 
 **Proxy hết lượt:** gói miễn phí của ScraperAPI chỉ có 5.000 credit/tháng; Lazada dùng gói premium nên tốn khoảng 10 credit mỗi lần. Khi nhà cung cấp báo hết lượt, app tự ngừng gọi proxy 6 giờ, các nguồn trên báo lỗi ngay kèm lý do (thanh trạng thái và ⚙ Cài đặt có cảnh báo), còn các nguồn không cần proxy vẫn chạy. Lưu khóa mới trong ⚙ Cài đặt thì app thử lại ngay. Tại thời điểm kiểm tra, gói của người phát triển đã hết lượt tháng 10 (được cấp lại ngày 03/11).
 
@@ -177,17 +184,16 @@ Các trang này trả mã 403/202, captcha hoặc trang thử thách khi truy c�
 
 ### Tải được qua proxy nhưng chưa có bộ đọc dữ liệu
 
-Trang trả về đủ nội dung khi dùng proxy IP đúng nước, nhưng chưa viết được bộ đọc cho cấu trúc của trang (hoặc kết quả trích ra không dùng được). Có thể làm tiếp nếu cần.
+Phân tích HTML đã lưu của từng trang cho thấy sản phẩm **không có trong HTML**: trang chỉ dựng kết quả bằng JavaScript sau khi tải (hoặc gọi một API cần khóa/phiên riêng chưa tìm được). Muốn đọc cần proxy có dựng JavaScript (tốn nhiều credit hơn) hoặc tìm ra API của từng trang.
 
 | Thị trường | Trang | Ghi chú |
 |---|---|---|
-| Pháp | Super U, Newpharma | Trang tải được nhưng không trích ra sản phẩm |
-| Đức | windeln.de, DocMorris | DocMorris trả nhiều sản phẩm không liên quan (thuốc) nên đã tắt |
-| Ý | Prenatal | Trang đầy đủ (1,7MB) nhưng chưa có bộ đọc |
-| Anh | Boots, Asda, Iceland | Tải được nhưng chưa trích ra sản phẩm |
-| Hàn | Lotte ON | Trích được tên nhưng không có giá |
-| Canada | Shoppers Drug Mart | Tải được nhưng chưa trích ra sản phẩm |
-| Mỹ | CVS, Thrive Market | Tải được nhưng chưa trích ra sản phẩm |
+| Anh | Boots, Asda, Iceland | Kết quả dựng bằng JavaScript; không thấy API công khai nào trong trang |
+| Mỹ | CVS, Thrive Market | CVS chỉ có khung chờ (shimmer); Thrive không có dữ liệu tìm kiếm trong HTML |
+| Đức | windeln.de | Tìm kiếm trả về trang thương hiệu/danh mục, không phải kết quả |
+| Đức | DocMorris | Đọc được nhưng trả nhiều sản phẩm không liên quan (thuốc) nên đã tắt |
+| Ý | Farmaciauno | Sản phẩm không có trong HTML (dựng bằng JavaScript) |
+| Pháp | Super U, Newpharma | Tải được qua proxy nhưng chưa phân tích được cấu trúc (HTML chưa được lưu lại để kiểm tra) |
 
 ### Chưa kiểm tra được rõ
 
@@ -198,7 +204,7 @@ Kết quả lần thử không kết luận được (lỗi 404 do đoán sai đ
 | Trang | Vấn đề |
 |---|---|
 | Esselunga, Conad (IT) | Chỉ hiện sản phẩm sau khi chọn địa chỉ giao hàng; Conad còn có bộ phát hiện bot |
-| REWE (DE) | Phải chọn cửa hàng mới có giá |
+| REWE (DE) | Đã có bộ đọc nhưng không có giá: REWE chỉ hiện giá sau khi chọn cửa hàng |
 | Auchan (FR) | Đọc được tên, ảnh, link, sao nhưng không có giá (giá chỉ hiện sau khi chọn cửa hàng) |
 | Müller (DE) | Tìm theo thương hiệu bị chuyển sang trang thương hiệu chỉ có banner |
 | Otto (DE) | Kết quả lẫn nhiều sản phẩm không liên quan (máy hút sữa…) nên đã tắt |
@@ -213,6 +219,7 @@ Kết quả lần thử không kết luận được (lỗi 404 do đoán sai đ
 ## Nhật ký cập nhật
 
 **06/10/2026**
+- Bộ đọc mới cho các trang tải được qua proxy: **Prenatal** (Meilisearch) và **eFarma** (Algolia) qua API tìm kiếm công khai của chính trang (có giá, EAN, lượt bán, thành phần), **Shoppers Drug Mart** (dữ liệu Next.js), **Lotte ON** (JSON nhúng), **REWE** (thẻ sản phẩm, không giá). Viết và kiểm tra trên HTML đã lưu vì proxy đã hết lượt.
 - Đọc trực tiếp **Kurly**, **11번가** (API công khai của chính trang), **E.Leclerc** (HTML).
 - Phát hiện proxy hết lượt: tạm ngừng gọi proxy, báo rõ trên thanh trạng thái và Cài đặt.
 
