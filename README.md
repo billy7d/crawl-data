@@ -92,12 +92,14 @@ git pull
 | Carrefour | FR | Qua `SCRAPE_PROXY` (IP Pháp) | Đọc dữ liệu gốc của trang: giá, giá/kg, **EAN**, quy cách, danh mục, ảnh gốc. Chặn IP ngoài Pháp nên đi qua proxy với `country_code=fr` (1 credit/lần, tự thử gói premium nếu bị chặn) |
 | Auchan | FR | Trang tìm kiếm (trực tiếp) | Tên, ảnh, link, điểm sao. Auchan chỉ hiện giá sau khi chọn cửa hàng nên không có giá |
 | Chronodrive | FR | Qua `SCRAPE_PROXY` | Tên, giá, ảnh, link |
+| E.Leclerc | FR | Trang tìm kiếm | Tên, giá, giá/kg, thương hiệu, **EAN** |
 | Shop Apotheke | DE | Trang tìm kiếm | Nhà thuốc online lớn nhất Đức (HiPP, Alete, Bebivita…) |
 | Farmaè, Farmacia Igea, Amica Farmacia | IT | Trang tìm kiếm | Nhà thuốc online Ý — bán phần lớn đồ ăn dặm (Plasmon, Mellin, HiPP) |
 | Aldi UK | GB | Trang tìm kiếm | Thương hiệu + tên + quy cách, giá, giá/100g |
 | Yahoo!ショッピング | JP | Qua `SCRAPE_PROXY` (IP Nhật) | |
 | Rakuten | JP | Trang tìm kiếm | 45 SP/trang: giá, điểm sao, số đánh giá, tên shop |
 | SSG.COM | KR | Qua `SCRAPE_PROXY` (IP Hàn) | Sàn của Shinsegae/E-mart |
+| Kurly, 11번가 | KR | API công khai của chính trang (không cần khóa) | Kurly: giá, giảm giá, số đánh giá. 11st: giá, **lượt bán**, điểm hài lòng, shop chính hãng |
 | Well.ca | CA | Trang tìm kiếm | |
 | Walmart Canada, Loblaws | CA | Qua `SCRAPE_PROXY` (IP Canada) | |
 | Kroger | US | Qua `SCRAPE_PROXY` (IP Mỹ) | Tên, giá, quy cách, **mã UPC** |

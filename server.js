@@ -11,7 +11,7 @@ import { translate, translateQuery } from './src/lib/translate.js';
 import { canEnrich, getDetail, isPublicHttpUrl } from './src/lib/enrich.js';
 import { suggest, keywordResearch } from './src/lib/suggest.js';
 import { jsonStore } from './src/lib/store.js';
-import { request, mapLimit } from './src/lib/http.js';
+import { request, mapLimit, proxyStatus } from './src/lib/http.js';
 import { clean, fold } from './src/lib/normalize.js';
 import { CooldownError } from './src/lib/limiter.js';
 import { runSearch } from './src/lib/run.js';
@@ -114,7 +114,7 @@ app.get('/api/search', async (req, res) => {
     if (finished) return;
     finished = true;
     clearTimeout(deadline);
-    send('done', { total: items.size, ms: Date.now() - t0 });
+    send('done', { total: items.size, ms: Date.now() - t0, proxy: proxyStatus() });
     res.end();
     const h = history.get().filter((e) => !(e.q.toLowerCase() === q.toLowerCase() && e.markets.join() === markets.join()));
     h.unshift({ q, markets, sources: want, t: Date.now(), count: items.size });
@@ -430,7 +430,7 @@ function guardSettings(req, res, next) {
 const providersPublic = () => Object.fromEntries(Object.entries(PROXY_PROVIDERS).map(([k, p]) => [k, { name: p.name, signup: p.signup }]));
 
 app.get('/api/settings', (req, res) => {
-  res.json({ fields: readSettings(), providers: providersPublic(), editable: isLocal(req) || !!process.env.SETTINGS_TOKEN });
+  res.json({ fields: readSettings(), providers: providersPublic(), editable: isLocal(req) || !!process.env.SETTINGS_TOKEN, proxy: proxyStatus() });
 });
 
 app.put('/api/settings', guardSettings, (req, res) => {
@@ -513,6 +513,7 @@ app.get('/api/meta', (req, res) => {
     markets: Object.entries(MARKETS).map(([code, m]) => ({ code, name: m.name, lang: m.lang, currency: m.currency })),
     countries: COUNTRY_NAMES,
     bestsellerMarkets: Object.keys(BESTSELLER_MARKETS),
+    proxy: proxyStatus(),
     rates: rates(),
   });
 });

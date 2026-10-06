@@ -132,7 +132,7 @@ export const carrefour = {
         products = carrefourProducts(text);
         if (products) break;
       } catch (e) {
-        if (signal?.aborted) throw e;
+        if (signal?.aborted || e.status === 402) throw e; // 402 = proxy out of credits: report that, not "blocked"
       }
     }
     if (!products) throw new HttpError('Carrefour chặn truy cập (tạm thời)', 429);
@@ -154,5 +154,38 @@ export const carrefour = {
         extra: { unitPrice: offer.price?.perUnitLabel || null, nutriscore: a.nutriscore?.letter || a.nutriscore || null, available: offer.availability?.purchasable ?? null },
       };
     }).filter((p) => p.title && p.url);
+  },
+};
+
+// E.Leclerc: server-rendered product cards carrying the EAN; the price is split into euro / cent spans
+// ("15 € , 99"), followed by the price per kg.
+export const leclerc = {
+  id: 'leclerc',
+  name: 'E.Leclerc',
+  kind: 'shop',
+  group,
+  markets: ['fr'],
+  limit: { concurrency: 2, gap: 500 },
+  filterIrrelevant: true,
+  async search({ q, signal }) {
+    const { text } = await fetchText(`https://www.e.leclerc/recherche?q=${encodeURIComponent(q)}`, { signal, timeout: 12000, lang, proxy: 'fallback' });
+    const $ = cheerio.load(text);
+    return $('article[data-product-card]').map((_, el) => {
+      const $el = $(el);
+      const a = $el.find('a[data-product-card-title], a[href^="/fp/"]').first();
+      const priceText = clean($el.find('[currency]').first().text());
+      const m = priceText.match(/(\d+)\s*€\s*,\s*(\d{2})/) || priceText.match(/(\d+)[,.](\d{2})\s*€/);
+      return {
+        title: clean(a.attr('title') || a.text()),
+        url: a.attr('href') ? `https://www.e.leclerc${a.attr('href')}` : null,
+        image: $el.find('img').first().attr('src') || null,
+        price: m ? Number(`${m[1]}.${m[2]}`) : null,
+        currency: 'EUR',
+        brand: clean($el.find('.p-small').first().text()) || null,
+        gtin: $el.attr('data-ean') || null,
+        snippet: priceText.match(/[\d,.]+\s*€\s*\/\s*\w+/)?.[0] || null,
+        seller: 'E.Leclerc',
+      };
+    }).get().filter((p) => p.title && p.url);
   },
 };

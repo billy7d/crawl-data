@@ -2,7 +2,7 @@
 // process.env immediately, so sources pick them up on the next search without a restart.
 import fs from 'node:fs';
 import path from 'node:path';
-import { request } from './http.js';
+import { request, resetProxyStatus } from './http.js';
 
 const ENV_FILE = path.resolve('.env');
 const EXAMPLE_FILE = path.resolve('.env.example');
@@ -98,6 +98,7 @@ export function validate(body) {
 const quote = (v) => `"${String(v).replace(/[\r\n]/g, '').replace(/"/g, '\\"')}"`;
 
 export function applySettings(changes) {
+  if ('SCRAPE_PROXY' in changes) resetProxyStatus(); // new key or plan: try the proxy again
   let lines;
   try {
     lines = fs.readFileSync(ENV_FILE, 'utf8').split(/\r?\n/);

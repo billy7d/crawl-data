@@ -449,6 +449,7 @@ function startSearch(q, { fresh = $('#opt-fresh').checked } = {}) {
   es.addEventListener('done', (e) => {
     const d = JSON.parse(e.data);
     S.doneMs = d.ms;
+    S.proxy = d.proxy || null;
     endSearch();
   });
   es.onerror = () => endSearch(true);
@@ -490,7 +491,8 @@ function renderStatus() {
     : `${S.stopped ? 'Đã dừng — giữ ' : 'Tìm thấy '}<b>${n}</b> kết quả từ ${tasks.filter((t) => t.count).length}/${tasks.length} nguồn trong ${secs}s`
       + (tasks.some((t) => ['error', 'cooldown', 'warn'].includes(t.status)) && !S.meta.sources.find((s) => s.id === 'gshop')?.enabled
         ? ' · <span class="muted">Một số nguồn bị chặn — </span><button type="button" class="hint-link" data-open-settings>thêm khóa miễn phí để ổn định hơn</button>'
-        : '');
+        : '')
+      + (S.proxy?.down ? ` · <span class="set-msg err">${esc(S.proxy.reason)}</span>` : '');
   const label = (t) => `${S.srcName[t.source] || t.source}${t.market !== 'world' && S.markets.length > 1 ? ` · ${t.market.toUpperCase()}` : ''}`;
   $('#task-chips').innerHTML = tasks.map((t) => {
     const detail = t.status === 'done' || t.status === 'warn'
@@ -1718,7 +1720,8 @@ function renderSettings() {
       <div class="set-msg" data-msg="${c.kind}"></div>
     </div>`;
   }).join('');
-  $('#settings-form').innerHTML = `${cards}
+  const proxyWarn = settingsData.proxy?.down ? `<div class="set-card"><p class="set-msg err">${esc(settingsData.proxy.reason)}</p></div>` : '';
+  $('#settings-form').innerHTML = `${proxyWarn}${cards}
     <div class="set-card">
       <div class="set-head"><h3>Thời gian lưu tạm kết quả</h3></div>
       <p class="muted small">Tìm lại cùng từ khóa trong khoảng này sẽ gần như tức thì và đỡ bị chặn hơn.</p>

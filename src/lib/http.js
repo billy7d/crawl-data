@@ -13,7 +13,12 @@ const BLOCK_PAGE = /captcha|robot or human|just a moment\.\.\.|attention require
 export const looksBlocked = (status, text) => [202, 403, 429, 503].includes(status) || (text.length < 40000 && BLOCK_PAGE.test(text));
 
 // SCRAPE_PROXY is a URL template with {url}, e.g. ScraperAPI: https://api.scraperapi.com/?api_key=KEY&url={url}
-export const proxyEnabled = () => !!process.env.SCRAPE_PROXY;
+// When the proxy plan runs out of credits it answers 403 to everything: stop calling it for a while (sources
+// that can read directly still do) and report why, instead of every search waiting on failing requests.
+let proxyDown = { until: 0, reason: null };
+export const proxyStatus = () => ({ configured: !!process.env.SCRAPE_PROXY, down: Date.now() < proxyDown.until, reason: Date.now() < proxyDown.until ? proxyDown.reason : null });
+export const resetProxyStatus = () => { proxyDown = { until: 0, reason: null }; };
+export const proxyEnabled = () => !!process.env.SCRAPE_PROXY && Date.now() >= proxyDown.until;
 // proxyExtra: provider options for hard sites (e.g. ScraperAPI "&premium=true" for Lazada), inserted before url=.
 const viaProxy = (url, extra = '') => {
   const tpl = process.env.SCRAPE_PROXY;
@@ -102,9 +107,21 @@ export async function request(url, {
 // proxy: 'fallback' retries through SCRAPE_PROXY when the site blocks us; 'always' goes through it directly.
 // proxyTimeout: how long to wait for the proxy (default 70s); proxyLane 'slow' for slow proxy requests.
 export async function fetchText(url, { proxy, proxyExtra, proxyTimeout = 70000, proxyLane, ...opts } = {}) {
+  // A proxy-only source while the proxy is out of credits: fail fast with the reason.
+  if (proxy === 'always' && process.env.SCRAPE_PROXY && !proxyEnabled()) throw new HttpError(proxyDown.reason, 402);
   const useProxy = proxy && proxyEnabled();
   const proxied = () => withProxySlot(proxyLane, async () => {
-    const go = () => request(viaProxy(url, proxyExtra), { ...opts, timeout: proxyTimeout }); // proxies retry internally: slow
+    const go = async () => {
+      // proxies retry internally: slow
+      const r = await request(viaProxy(url, proxyExtra), { ...opts, timeout: proxyTimeout, okStatuses: [200, 201, 203, 204, 403] });
+      if (r.status !== 403) return r;
+      const body = await r.text();
+      if (/exhausted|credits?|quota|subscription|payment/i.test(body)) {
+        proxyDown = { until: Date.now() + 6 * 3600e3, reason: 'Proxy (SCRAPE_PROXY) đã hết lượt trong tháng — các nguồn chỉ đọc được qua proxy tạm ngừng. Nạp thêm/đổi khóa trong ⚙ Cài đặt nguồn.' };
+        throw new HttpError(proxyDown.reason, 402);
+      }
+      throw new HttpError('HTTP 403 (bị chặn/giới hạn tạm thời)', 403);
+    };
     let res;
     try {
       res = await go();

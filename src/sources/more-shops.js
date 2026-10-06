@@ -2,7 +2,7 @@
 // app state) that the generic listing extractor reads. Some answer directly; the others only to a visitor
 // from their own country, so they go through SCRAPE_PROXY with that country's IP (1 credit per search).
 import * as cheerio from 'cheerio';
-import { fetchText } from '../lib/http.js';
+import { fetchJSON, fetchText } from '../lib/http.js';
 import { clean } from '../lib/normalize.js';
 import { storeSource } from './stores.js';
 
@@ -110,3 +110,58 @@ moreShops.push(cardSource({
     };
   }).get(),
 }));
+
+// Korea — sites that render results with JavaScript from their own JSON APIs, which answer directly.
+
+// Market Kurly: search API used by kurly.com (guest access).
+moreShops.push({
+  id: 'kurly', name: 'Kurly', kind: 'shop', group, markets: ['kr'], filterIrrelevant: true,
+  limit: { concurrency: 2, gap: 400 },
+  async search({ q, signal }) {
+    const d = await fetchJSON(`https://api.kurly.com/search/v4/sites/market/normal-search?keyword=${encodeURIComponent(q)}&sortType=4&page=1`, {
+      signal, timeout: 10000, headers: { Origin: 'https://www.kurly.com', Referer: 'https://www.kurly.com/' },
+    });
+    const items = (d.data?.listSections || []).flatMap((s) => s.data?.items || []).filter((p) => p?.no && p.name);
+    return items.map((p) => ({
+      title: clean(p.name),
+      url: `https://www.kurly.com/goods/${p.no}`,
+      image: p.listImageUrl || null,
+      price: p.discountedPrice ?? p.salesPrice ?? null,
+      originalPrice: p.discountedPrice && p.salesPrice > p.discountedPrice ? p.salesPrice : null,
+      currency: 'KRW',
+      reviews: p.reviewCount ? Number(String(p.reviewCount).replace(/\D/g, '')) || null : null,
+      snippet: p.shortDescription || null,
+      seller: 'Kurly',
+      extra: { soldOut: !!p.isSoldOut },
+    }));
+  },
+});
+
+// 11st (11번가): search API used by search.11st.co.kr; the answer has several sections (ads, recommended,
+// main list) — products are collected from all of them, ads dropped, duplicates merged.
+moreShops.push({
+  id: '11st', name: '11번가', kind: 'shop', group, markets: ['kr'], filterIrrelevant: true,
+  limit: { concurrency: 2, gap: 400 },
+  async search({ q, signal }) {
+    const d = await fetchJSON(`https://apis.11st.co.kr/search/api/tab?kwd=${encodeURIComponent(q)}&tabId=TOTAL_SEARCH`, {
+      signal, timeout: 12000, headers: { Referer: 'https://search.11st.co.kr/' },
+    });
+    const seen = new Set();
+    return (d.data || []).flatMap((s) => s.items || [])
+      .filter((p) => p?.id && p.title && p.finalPrc != null && !p.adProduct && !seen.has(p.id) && seen.add(p.id))
+      .map((p) => ({
+        title: clean(p.title),
+        url: `https://www.11st.co.kr/products/${p.id}`,
+        image: p.imageUrl || null,
+        price: Number(p.finalPrc) || null,
+        originalPrice: Number(p.selPrc) > Number(p.finalPrc) ? Number(p.selPrc) : null,
+        currency: 'KRW',
+        brand: p.brandEngNm || null,
+        rating: p.satisfactionScore ? Number(p.satisfactionScore) : null,
+        reviews: p.reviewCountText ? Number(String(p.reviewCountText).replace(/\D/g, '')) || null : null,
+        sold: p.saleCnt ? Number(p.saleCnt) || null : null,
+        seller: p.sellerNickName ? `11번가 · ${p.sellerNickName}` : '11번가',
+        extra: { official: p.isOfficial === true || p.sellerBadgeType === 'OFFICIAL' },
+      }));
+  },
+});
