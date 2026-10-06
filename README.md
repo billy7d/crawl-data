@@ -128,9 +128,112 @@ Các chuỗi bán lẻ lớn dùng hệ thống chống bot (Akamai, PerimeterX,
    docker compose -f searxng/docker-compose.yml up -d
    ```
    rồi đặt `SEARXNG_URL=http://localhost:8888`.
-3. **`SCRAPE_PROXY`** (ScraperAPI, ScrapingBee, ZenRows…): mở khoá cào trực tiếp Walmart, iHerb, Shopee, Boots… và tự dùng làm phương án dự phòng khi Amazon/Tesco chặn. Trong Cài đặt nguồn chỉ cần chọn nhà cung cấp và dán API key.
+3. **`SCRAPE_PROXY`** (ScraperAPI, ScrapingBee, ZenRows…): mở khoá cào trực tiếp Walmart, iHerb, Coles, Carrefour, Kroger… (Shopee và Boots không đọc được ổn định, xem mục Tình trạng nguồn dữ liệu) và tự dùng làm phương án dự phòng khi Amazon/Tesco chặn. Trong Cài đặt nguồn chỉ cần chọn nhà cung cấp và dán API key.
 
 Cài đặt chỉ chỉnh được từ chính máy chạy app. Nếu đưa app lên máy chủ, đặt thêm `SETTINGS_TOKEN` trong `.env` để quản trị từ xa.
+
+## Tình trạng nguồn dữ liệu (kiểm tra ngày 06/10/2026)
+
+Trang web đổi giao diện và hệ thống chống bot liên tục, nên bảng dưới là ảnh chụp tại thời điểm kiểm tra, không phải cam kết. Cách kiểm tra lại từng nguồn: `npm run test:sources -- "từ khóa"`.
+
+Các nguồn dưới đây được thử theo ba cách: truy cập thẳng, qua proxy IP đúng nước (`SCRAPE_PROXY` + `country_code`), và dò API mà chính trang dùng để hiện kết quả. Ứng dụng **không** giải captcha và **không** giả dạng trình duyệt hay người dùng để vượt hệ thống chống bot; trang nào chặn bằng cách đó thì chỉ lấy được dữ liệu gián tiếp (xem cột "Vẫn có dữ liệu qua").
+
+### Đang chạy tốt, không cần khóa
+
+| Thị trường | Nguồn |
+|---|---|
+| VN | Con Cưng, Kids Plaza, Tiki (khi IP không bị chặn) |
+| Pháp | Monoprix, Auchan (không có giá), E.Leclerc |
+| Đức | dm-drogerie, Shop Apotheke |
+| Ý | Farmaè, Farmacia Igea, Amica Farmacia |
+| Anh | Tesco, Sainsbury's, Waitrose, Morrisons, Aldi UK |
+| Nhật | Rakuten |
+| Hàn | Kurly, 11번가 |
+| Canada | Well.ca |
+| Mỹ | Target |
+| Úc / Singapore | Woolworths, FairPrice |
+| Toàn cầu | Open Food Facts, Bing, DuckDuckGo |
+
+### Chỉ chạy khi có `SCRAPE_PROXY` còn lượt
+
+Lazada, Carrefour (FR), Chronodrive (FR), Yahoo!ショッピング (JP), SSG.COM (KR), Walmart Canada, Loblaws (CA), Kroger (US), Walmart, iHerb, Coles, Coupang. Amazon thường đọc thẳng được, bị chặn thì tự chuyển qua proxy.
+
+**Proxy hết lượt:** gói miễn phí của ScraperAPI chỉ có 5.000 credit/tháng; Lazada dùng gói premium nên tốn khoảng 10 credit mỗi lần. Khi nhà cung cấp báo hết lượt, app tự ngừng gọi proxy 6 giờ, các nguồn trên báo lỗi ngay kèm lý do (thanh trạng thái và ⚙ Cài đặt có cảnh báo), còn các nguồn không cần proxy vẫn chạy. Lưu khóa mới trong ⚙ Cài đặt thì app thử lại ngay. Tại thời điểm kiểm tra, gói của người phát triển đã hết lượt tháng 10 (được cấp lại ngày 03/11).
+
+### Chặn bot — chưa truy cập được
+
+Các trang này trả mã 403/202, captcha hoặc trang thử thách khi truy cập thẳng, và vẫn lỗi hoặc quá thời gian khi qua proxy IP đúng nước. Chúng dùng dịch vụ chống bot theo hành vi (DataDome, Akamai, PerimeterX, Cloudflare…), không phải chặn theo vùng.
+
+| Thị trường | Trang | Vẫn có dữ liệu qua |
+|---|---|---|
+| Pháp | Cora, Intermarché, Franprix | Google Shopping, "Shop khác" |
+| Đức | Kaufland | Google Shopping, "Shop khác", Amazon |
+| Ý | Carrefour.it, Iper | Google Shopping, "Shop khác", Amazon |
+| Anh | Holland & Barrett, Ocado | Google Shopping, "Shop khác" |
+| Hàn | Gmarket, Naver Shopping | Coupang, SSG, 11번가, Kurly |
+| Canada | Voilà | Google Shopping, "Shop khác" |
+| Mỹ | Walgreens | Google Shopping, "Shop khác" |
+| Việt Nam | Shopee (cần gói "ultra premium" của ScraperAPI, rất tốn credit) | Google Shopping, "Shop khác" (có giá, không có lượt bán) |
+
+### Tải được qua proxy nhưng chưa có bộ đọc dữ liệu
+
+Trang trả về đủ nội dung khi dùng proxy IP đúng nước, nhưng chưa viết được bộ đọc cho cấu trúc của trang (hoặc kết quả trích ra không dùng được). Có thể làm tiếp nếu cần.
+
+| Thị trường | Trang | Ghi chú |
+|---|---|---|
+| Pháp | Super U, Newpharma | Trang tải được nhưng không trích ra sản phẩm |
+| Đức | windeln.de, DocMorris | DocMorris trả nhiều sản phẩm không liên quan (thuốc) nên đã tắt |
+| Ý | Prenatal | Trang đầy đủ (1,7MB) nhưng chưa có bộ đọc |
+| Anh | Boots, Asda, Iceland | Tải được nhưng chưa trích ra sản phẩm |
+| Hàn | Lotte ON | Trích được tên nhưng không có giá |
+| Canada | Shoppers Drug Mart | Tải được nhưng chưa trích ra sản phẩm |
+| Mỹ | CVS, Thrive Market | Tải được nhưng chưa trích ra sản phẩm |
+
+### Chưa kiểm tra được rõ
+
+Kết quả lần thử không kết luận được (lỗi 404 do đoán sai địa chỉ tìm kiếm, hoặc lỗi 429 do thử quá nhiều yêu cầu cùng lúc so với giới hạn luồng của gói proxy). Cần thử lại: babymarkt, Rossmann (trả trang rỗng 3KB), Auction (KR), EasyCoop (IT), Co-op (UK), Metro, London Drugs (CA).
+
+### Có vấn đề khác — chưa đọc được
+
+| Trang | Vấn đề |
+|---|---|
+| Esselunga, Conad (IT) | Chỉ hiện sản phẩm sau khi chọn địa chỉ giao hàng; Conad còn có bộ phát hiện bot |
+| REWE (DE) | Phải chọn cửa hàng mới có giá |
+| Auchan (FR) | Đọc được tên, ảnh, link, sao nhưng không có giá (giá chỉ hiện sau khi chọn cửa hàng) |
+| Müller (DE) | Tìm theo thương hiệu bị chuyển sang trang thương hiệu chỉ có banner |
+| Otto (DE) | Kết quả lẫn nhiều sản phẩm không liên quan (máy hút sữa…) nên đã tắt |
+| Shopee (VN) | Xem phần chặn bot ở trên. Hướng hợp lệ: Shopee Affiliate Open API (miễn phí, cần đăng ký, chưa tích hợp) |
+
+### Hướng hợp lệ để lấy thêm dữ liệu
+
+- **API chính thức miễn phí (bạn tự đăng ký khóa):** Naver Shopping API (phủ Gmarket, 11st và nhiều shop Hàn), Shopee Affiliate Open API, Rakuten Ichiba API, Yahoo Shopping Japan API, Kroger API.
+- **Nâng gói proxy** để có nhiều lượt và nhiều luồng hơn (đặt `PROXY_CONCURRENCY` trong `.env`).
+- **Tiện ích Chrome** đọc trang ngay trong trình duyệt của bạn khi bạn mở trang đó (chưa làm).
+
+## Nhật ký cập nhật
+
+**06/10/2026**
+- Đọc trực tiếp **Kurly**, **11번가** (API công khai của chính trang), **E.Leclerc** (HTML).
+- Phát hiện proxy hết lượt: tạm ngừng gọi proxy, báo rõ trên thanh trạng thái và Cài đặt.
+
+**05/10/2026**
+- Thêm 12 nguồn đọc trực tiếp cho Đức, Ý, Anh, Nhật, Hàn, Canada, Mỹ (Shop Apotheke, Farmaè, Farmacia Igea, Amica Farmacia, Aldi UK, Yahoo!ショッピング, SSG, Well.ca, Walmart Canada, Loblaws, Kroger); Rakuten đọc đủ 45 sản phẩm/trang.
+- Pháp: thêm Carrefour (giải mã dữ liệu gốc, có EAN), Auchan, Chronodrive, Monoprix.
+- Tìm ở nước ngoài không còn dịch tên thương hiệu ("nestle" từng thành "se nicher") và giữ từ khóa đã đúng ngôn ngữ thị trường.
+- Tìm theo nhóm nhỏ trang bán qua Serper, Google Shopping đọc nhiều trang; cài đặt **Độ phủ tìm kiếm** (Tiết kiệm / Cân bằng / Sâu).
+- Nút **Dừng** tìm kiếm, nút **Tìm mới** thay phiên cũ, **Dừng phân tích** ở tab Cơ hội nhập khẩu.
+- Chạy được trên macOS (`chay-app.command`, `tao-app-macos.command`); yêu cầu Node ≥ 22.13.
+
+**Trước đó**
+- Giai đoạn 5: **Bán chạy theo nước** (Amazon Best Sellers 10 thị trường) đưa vào phân tích nhập khẩu chính ngạch.
+- Phân tích nhập khẩu chạy 2 lượt (nhanh + bổ sung), lưu lịch sử lượt bán, điểm cơ hội, danh bạ nhà nhập khẩu.
+- Cài đặt nguồn trong app, `chay-app.bat`, lấy thành phần và cách bảo quản của sản phẩm.
+
+### Chưa làm
+
+- Tra cứu đăng ký sản phẩm của Cục An toàn thực phẩm: trang tra cứu chính thức (`congbosanpham.vfa.gov.vn`, `nghidinh15.vfa.gov.vn`) chuyển hướng lỗi hoặc chặn truy cập tự động.
+- Tích hợp Shopee Affiliate Open API (cần khóa do bạn đăng ký).
+- Tiện ích Chrome cho các trang chặn bot.
 
 ## Cấu trúc mã
 
