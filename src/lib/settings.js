@@ -35,6 +35,7 @@ export function readSettings() {
     SERPER_API_KEY: { set: !!e.SERPER_API_KEY, masked: mask(e.SERPER_API_KEY) },
     BRAVE_API_KEY: { set: !!e.BRAVE_API_KEY, masked: mask(e.BRAVE_API_KEY) },
     SEARXNG_URL: { set: !!e.SEARXNG_URL, value: e.SEARXNG_URL || '' },
+    NAVER_CLIENT_ID: { set: !!(e.NAVER_CLIENT_ID && e.NAVER_CLIENT_SECRET), masked: mask(e.NAVER_CLIENT_ID), secretSet: !!e.NAVER_CLIENT_SECRET },
     SCRAPE_PROXY: describeProxy(e.SCRAPE_PROXY),
     SEARCH_CACHE_HOURS: { value: Number(e.SEARCH_CACHE_HOURS || 6) },
     SALES_CHECK_HOURS: { value: Number(e.SALES_CHECK_HOURS || 24) },
@@ -58,6 +59,13 @@ export function validate(body) {
     const v = str(body.BRAVE_API_KEY);
     if (v && !KEY_RE.test(v)) errors.push('Khóa Brave không hợp lệ.');
     else changes.BRAVE_API_KEY = v || null;
+  }
+  for (const [field, label] of [['NAVER_CLIENT_ID', 'Client ID'], ['NAVER_CLIENT_SECRET', 'Client Secret']]) {
+    if (field in body) {
+      const v = str(body[field]);
+      if (v && !/^[A-Za-z0-9_-]{6,60}$/.test(v)) errors.push(`Naver ${label} không hợp lệ (chỉ gồm chữ, số, gạch dưới/gạch ngang).`);
+      else changes[field] = v || null;
+    }
   }
   if ('SEARXNG_URL' in body) {
     const v = str(body.SEARXNG_URL).replace(/\/+$/, '');
@@ -147,6 +155,16 @@ export async function testSetting(kind, body) {
       const d = await res.json();
       return { ok: true, message: `Khóa hoạt động — ${d.web?.results?.length ?? 0} kết quả thử.` };
     }
+    if (kind === 'naver') {
+      const id = String(body.NAVER_CLIENT_ID || process.env.NAVER_CLIENT_ID || '').trim();
+      const secret = String(body.NAVER_CLIENT_SECRET || process.env.NAVER_CLIENT_SECRET || '').trim();
+      if (!id || !secret) return { ok: false, message: 'Cần nhập cả Client ID và Client Secret.' };
+      const res = await request('https://openapi.naver.com/v1/search/shop.json?query=%EC%9D%B4%EC%9C%A0%EC%8B%9D&display=5', {
+        timeout: 10000, accept: 'application/json', headers: { 'X-Naver-Client-Id': id, 'X-Naver-Client-Secret': secret },
+      });
+      const d = await res.json();
+      return { ok: true, message: `Khóa hoạt động — Naver Shopping có ${(d.total ?? 0).toLocaleString('en-US')} kết quả cho "이유식" (đồ ăn dặm).` };
+    }
     if (kind === 'searxng') {
       const base = (v.changes.SEARXNG_URL ?? process.env.SEARXNG_URL ?? '').replace(/\/+$/, '');
       if (!base) return { ok: false, message: 'Chưa nhập địa chỉ.' };
@@ -167,6 +185,6 @@ export async function testSetting(kind, body) {
     return { ok: false, message: 'Loại kiểm tra không hợp lệ.' };
   } catch (e) {
     const auth = e.status === 401 || e.status === 403;
-    return { ok: false, message: auth ? 'Khóa bị từ chối (sai khóa hoặc hết lượt miễn phí).' : `Không kiểm tra được: ${e.message}` };
+    return { ok: false, message: auth ? (kind === 'naver' ? 'Naver từ chối: sai Client ID/Secret, hoặc ứng dụng chưa bật API "검색" (Search).' : 'Khóa bị từ chối (sai khóa hoặc hết lượt miễn phí).') : `Không kiểm tra được: ${e.message}` };
   }
 }

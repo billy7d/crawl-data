@@ -1657,6 +1657,11 @@ const SETTING_CARDS = [
     placeholder: 'http://localhost:8888', link: ['https://docs.searxng.org/admin/installation-docker.html', 'Hướng dẫn cài'],
   },
   {
+    kind: 'naver', field: 'NAVER_CLIENT_ID', title: 'Naver Shopping (Hàn Quốc)',
+    desc: 'API chính thức, miễn phí 25.000 lượt/ngày. Naver Shopping so sánh giá của gần như mọi shop Hàn (Gmarket, 11st, Coupang, SSG, Smart Store…), kể cả các shop chặn bot. Cần đăng ký ứng dụng và bật API "검색" (Search) để lấy Client ID và Client Secret.',
+    link: ['https://developers.naver.com/apps/#/register', 'Đăng ký ứng dụng tại developers.naver.com'],
+  },
+  {
     kind: 'brave', field: 'BRAVE_API_KEY', title: 'Brave Search API',
     desc: 'Search engine độc lập, có hạn mức miễn phí hằng tháng. Dùng làm nguồn kết quả web và tìm shop chặn bot.',
     placeholder: 'Dán API key của Brave Search', link: ['https://brave.com/search/api/', 'Lấy khóa tại brave.com'],
@@ -1701,6 +1706,17 @@ function renderSettings() {
           <button type="button" class="btn small ghost" data-reveal>Hiện</button>
           <a class="small" data-proxy-signup href="${esc(providers[cur]?.signup || providers.scraperapi.signup)}" target="_blank" rel="noopener noreferrer">Đăng ký miễn phí ↗</a>
           ${proxy.set ? '<button type="button" class="btn small ghost" data-clear="SCRAPE_PROXY">Gỡ proxy</button>' : ''}
+        </div>`;
+    } else if (c.kind === 'naver') {
+      row = `<div class="set-row">
+          <input type="text" name="NAVER_CLIENT_ID" placeholder="${f.set ? 'Để trống = giữ Client ID hiện tại' : 'Client ID'}" aria-label="Naver Client ID" autocomplete="off">
+          <input type="password" name="NAVER_CLIENT_SECRET" placeholder="${f.set ? 'Để trống = giữ Client Secret hiện tại' : 'Client Secret'}" aria-label="Naver Client Secret" autocomplete="off">
+        </div>
+        <div class="set-row" style="margin-top:8px">
+          <button type="button" class="btn small" data-test="naver">Kiểm tra</button>
+          <button type="button" class="btn small ghost" data-reveal>Hiện</button>
+          <a class="small" href="${esc(c.link[0])}" target="_blank" rel="noopener noreferrer">${esc(c.link[1])} ↗</a>
+          ${f.set ? '<button type="button" class="btn small ghost" data-clear="NAVER_CLIENT_ID">Gỡ</button>' : ''}
         </div>`;
     } else {
       row = `<div class="set-row">
@@ -1751,6 +1767,10 @@ function settingsPayload(form, only) {
   const want = (k) => !only || only === k;
   if (want('serper') && v('SERPER_API_KEY')) body.SERPER_API_KEY = v('SERPER_API_KEY');
   if (want('brave') && v('BRAVE_API_KEY')) body.BRAVE_API_KEY = v('BRAVE_API_KEY');
+  if (want('naver')) {
+    if (v('NAVER_CLIENT_ID')) body.NAVER_CLIENT_ID = v('NAVER_CLIENT_ID');
+    if (v('NAVER_CLIENT_SECRET')) body.NAVER_CLIENT_SECRET = v('NAVER_CLIENT_SECRET');
+  }
   if (want('searxng') && v('SEARXNG_URL') !== (settingsData.fields.SEARXNG_URL.value || '')) body.SEARXNG_URL = v('SEARXNG_URL');
   if (want('proxy')) {
     const provider = v('proxyProvider');
@@ -1828,7 +1848,8 @@ function bindSettings() {
     if (clear) {
       if (!confirm('Gỡ cấu hình này? Nguồn tương ứng sẽ tắt.')) return;
       const key = clear.dataset.clear;
-      const body = key === 'SCRAPE_PROXY' ? { proxyProvider: 'custom', SCRAPE_PROXY: '' } : { [key]: '' };
+      const body = key === 'SCRAPE_PROXY' ? { proxyProvider: 'custom', SCRAPE_PROXY: '' }
+        : key === 'NAVER_CLIENT_ID' ? { NAVER_CLIENT_ID: '', NAVER_CLIENT_SECRET: '' } : { [key]: '' };
       try {
         await saveSettings(body, 'Đã gỡ.');
       } catch (err) {

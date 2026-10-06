@@ -117,6 +117,7 @@ git pull
 | Google, Google Shopping | Mọi thị trường | Cần `SERPER_API_KEY` | **Khuyên dùng:** Google Shopping gom giá từ gần như mọi shop |
 | SearXNG | Mọi thị trường | Cần `SEARXNG_URL` | Meta-search tự host: Google + Bing + DDG + Brave + Qwant |
 | Brave Search | Mọi thị trường | Cần `BRAVE_API_KEY` | |
+| **Naver Shopping** | KR | API chính thức, cần `NAVER_CLIENT_ID` + `NAVER_CLIENT_SECRET` | Miễn phí 25.000 lượt/ngày. Máy so sánh giá lớn nhất Hàn Quốc: mỗi kết quả là giá thấp nhất trong nhiều shop (Gmarket, 11st, Coupang, SSG, Smart Store…), kèm giá cao nhất, thương hiệu, nhà sản xuất, danh mục. Không có lượt bán/đánh giá. "Độ phủ sâu" đọc 200 kết quả thay vì 100 |
 | Walmart, iHerb, Coles, Coupang (trực tiếp) | | Cần `SCRAPE_PROXY` | Đọc qua proxy chống chặn bot. Chemist Warehouse, eBay, Shopee đã bỏ (qua proxy thường chỉ nhận trang chặn; Shopee cần gói ultra premium). Asda và Boots đọc qua API tìm kiếm riêng (xem bảng trên) — vẫn có qua "Shop khác" |
 
 ### Về các trang chặn bot (Walmart, Tesco, Amazon US…)
@@ -179,7 +180,7 @@ Các trang này trả mã 403/202, captcha hoặc trang thử thách khi truy c�
 | Đức | Kaufland | Google Shopping, "Shop khác", Amazon |
 | Ý | Carrefour.it, Iper, Farmaciauno (Cloudflare "Attention Required") | Google Shopping, "Shop khác", Amazon |
 | Anh | Holland & Barrett, Ocado, Iceland ("Access Denied" cả khi mở bằng trình duyệt thật) | Google Shopping, "Shop khác" |
-| Hàn | Gmarket, Naver Shopping | Coupang, SSG, 11번가, Kurly |
+| Hàn | Gmarket, Auction (Naver Shopping có phủ các shop này khi đã cấu hình khóa Naver) | Coupang, SSG, 11번가, Kurly, Naver Shopping |
 | Canada | Voilà | Google Shopping, "Shop khác" |
 | Mỹ | Walgreens, Thrive Market (CloudFront báo lỗi), CVS (chỉ cho IP trong nước Mỹ) | Google Shopping, "Shop khác" |
 | Việt Nam | Shopee (cần gói "ultra premium" của ScraperAPI, rất tốn credit) | Google Shopping, "Shop khác" (có giá, không có lượt bán) |
@@ -213,13 +214,14 @@ Kết quả lần thử không kết luận được (lỗi 404 do đoán sai đ
 
 ### Hướng hợp lệ để lấy thêm dữ liệu
 
-- **API chính thức miễn phí (bạn tự đăng ký khóa):** Naver Shopping API (phủ Gmarket, 11st và nhiều shop Hàn), Shopee Affiliate Open API, Rakuten Ichiba API, Yahoo Shopping Japan API, Kroger API.
+- **API chính thức miễn phí (bạn tự đăng ký khóa):** Naver Shopping API (đã tích hợp, xem bảng nguồn), Shopee Affiliate Open API, Rakuten Ichiba API, Yahoo Shopping Japan API, Kroger API.
 - **Nâng gói proxy** để có nhiều lượt và nhiều luồng hơn (đặt `PROXY_CONCURRENCY` trong `.env`).
 - **Tiện ích Chrome** đọc trang ngay trong trình duyệt của bạn khi bạn mở trang đó (chưa làm).
 
 ## Nhật ký cập nhật
 
 **06/10/2026**
+- Tích hợp **Naver Shopping API** (Hàn Quốc): thẻ cài đặt riêng với ô Client ID/Secret, nút Kiểm tra khóa, lưu vào `.env` (ẩn khóa khi hiển thị).
 - Thêm **Asda** và **Boots** (Anh) qua API Algolia công khai của chính trang (tìm ra bằng cách mở trang trong trình duyệt thật): Asda có giá, sao, quy cách; Boots có UPC, giá, đánh giá.
 - Bộ đọc mới cho các trang tải được qua proxy: **Prenatal** (Meilisearch) và **eFarma** (Algolia) qua API tìm kiếm công khai của chính trang (có giá, EAN, lượt bán, thành phần), **Shoppers Drug Mart** (dữ liệu Next.js), **Lotte ON** (JSON nhúng), **REWE** (thẻ sản phẩm, không giá). Viết và kiểm tra trên HTML đã lưu vì proxy đã hết lượt.
 - Đọc trực tiếp **Kurly**, **11번가** (API công khai của chính trang), **E.Leclerc** (HTML).
