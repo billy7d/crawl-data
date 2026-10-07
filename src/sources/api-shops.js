@@ -368,25 +368,41 @@ export const lotteon = {
   },
 };
 
-// ---------------------------------------------------------------- REWE (server-rendered tiles, no price)
+// ---------------------------------------------------------------- REWE (with store context)
+
+// Store cookie and marketId are unverified guesses.
+const REWE_STORE_COOKIE = 'lr_market_id=1764010; isMarketSelected=true; marketId=1764010; rewe_zip=10115; rewe_market=1764010';
 
 export function parseRewe(html) {
   const $ = cheerio.load(html);
   const seen = new Set();
   const out = [];
-  $('[class*="a-pt__product-tile_"]').each((_, el) => {
+  $('[class*="a-pt__product-tile_"], [class*="product-tile"]').each((_, el) => {
     const $el = $(el);
-    const title = clean($el.find('h4').first().text());
+    const title = clean($el.find('h4, [class*="product-title"]').first().text());
     const href = $el.find('a[href^="/shop/p/"]').first().attr('href');
     if (!title || !href || seen.has(href)) return;
     seen.add(href);
     const img = $el.find('img').first().attr('src');
     const grammage = clean($el.find('[class*="grammage"]').first().text());
+
+    // Only the item price: unit prices (Grundpreis, per kg/l) are skipped; prices show only with a chosen market.
+    let price = null;
+    $el.find('[class*="price"], [class*="Price"], [data-testid*="price"]').each((__, p) => {
+      const t = clean($(p).text());
+      if (!t || /kg|l =|grundpreis|\/100|1 kg|1 l/i.test(t)) return;
+      const m = t.match(/(\d+)[,.](\d{2})\s*€/) || t.match(/€\s*(\d+)[,.](\d{2})/);
+      if (m) {
+        price = Number(`${m[1]}.${m[2]}`);
+        return false;
+      }
+    });
+
     out.push({
       title: grammage && !title.includes(grammage) ? `${title} ${grammage}` : title,
-      url: `https://shop.rewe.de${href}`,
+      url: new URL(href, 'https://shop.rewe.de').href,
       image: img || null,
-      price: null, // "Konkreter Preis abhängig vom Standort": REWE shows prices only for a chosen market
+      price,
       currency: 'EUR',
       seller: 'REWE',
     });
@@ -404,8 +420,9 @@ export const rewe = {
   needsKey: 'SCRAPE_PROXY',
   limit: { concurrency: 2, gap: 400 },
   async search({ q, signal }) {
-    const { text } = await fetchText(`https://shop.rewe.de/productList?search=${encodeURIComponent(q)}`, {
-      signal, timeout: 15000, lang: 'de-DE,de;q=0.9', proxy: 'always', proxyExtra: '&country_code=de', proxyTimeout: 50000,
+    const { text } = await fetchText(`https://shop.rewe.de/productList?search=${encodeURIComponent(q)}&marketId=1764010`, {
+      signal, timeout: 15000, lang: 'de-DE,de;q=0.9', proxy: 'always', proxyExtra: '&country_code=de&keep_headers=true', proxyTimeout: 50000,
+      headers: { Cookie: REWE_STORE_COOKIE },
     });
     return parseRewe(text);
   },

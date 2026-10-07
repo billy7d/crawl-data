@@ -6,6 +6,10 @@ import { loadRates } from '../src/lib/currency.js';
 import { translateQuery } from '../src/lib/translate.js';
 import { MARKETS } from '../src/lib/markets.js';
 
+try {
+  process.loadEnvFile('.env');
+} catch {}
+
 const q = process.argv[2] || 'bột ăn dặm hipp';
 const only = process.argv.slice(3);
 await loadRates();

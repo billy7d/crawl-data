@@ -64,6 +64,76 @@ function buildSignal(signal, timeout) {
   return signal ? AbortSignal.any([signal, t]) : t;
 }
 
+// Lightweight domain-based Cookie Jar to preserve session cookies across requests
+const cookieJar = new Map();
+
+export function getCookiesForUrl(url) {
+  try {
+    const { hostname } = new URL(url);
+    const domain = hostname.toLowerCase();
+    const cookies = [];
+    for (const [host, jar] of cookieJar.entries()) {
+      if (domain === host || domain.endsWith('.' + host)) {
+        for (const [k, v] of jar.entries()) {
+          cookies.push(`${k}=${v}`);
+        }
+      }
+    }
+    return cookies.join('; ');
+  } catch {
+    return '';
+  }
+}
+
+const MAX_HOSTS = 300;
+const MAX_COOKIES_PER_HOST = 50;
+
+// Only the first name=value pair of a Set-Cookie header is the cookie; the rest are attributes.
+export function setCookieForUrl(url, setCookieHeader) {
+  try {
+    const { hostname } = new URL(url);
+    const host = hostname.toLowerCase();
+    const [pair, ...attrs] = String(setCookieHeader).split(';');
+    const idx = pair.indexOf('=');
+    if (idx <= 0) return;
+    const k = pair.slice(0, idx).trim();
+    const v = pair.slice(idx + 1).trim();
+    if (!k) return;
+    let expired = v === '';
+    for (const a of attrs) {
+      const i = a.indexOf('=');
+      const name = (i < 0 ? a : a.slice(0, i)).trim().toLowerCase();
+      const val = i < 0 ? '' : a.slice(i + 1).trim();
+      if (name === 'max-age' && Number(val) <= 0) expired = true;
+      if (name === 'expires') {
+        const t = Date.parse(val);
+        if (!Number.isNaN(t) && t < Date.now()) expired = true;
+      }
+    }
+    if (expired) {
+      cookieJar.get(host)?.delete(k);
+      return;
+    }
+    if (!cookieJar.has(host)) {
+      if (cookieJar.size >= MAX_HOSTS) cookieJar.delete(cookieJar.keys().next().value);
+      cookieJar.set(host, new Map());
+    }
+    const jar = cookieJar.get(host);
+    if (!jar.has(k) && jar.size >= MAX_COOKIES_PER_HOST) jar.delete(jar.keys().next().value);
+    jar.set(k, v);
+  } catch {}
+}
+
+export function saveResponseCookies(url, res) {
+  if (!res || !res.headers) return;
+  const setCookies = typeof res.headers.getSetCookie === 'function'
+    ? res.headers.getSetCookie()
+    : [res.headers.get('set-cookie')].filter(Boolean);
+  for (const c of setCookies) {
+    setCookieForUrl(url, c);
+  }
+}
+
 export async function request(url, {
   timeout = 8000,
   headers = {},
@@ -75,6 +145,19 @@ export async function request(url, {
   okStatuses,
 } = {}) {
   let res;
+  // One Cookie header: jar first, explicit cookies (any header case) replace jar values of the same name.
+  const cookieKeys = Object.keys(headers).filter((k) => k.toLowerCase() === 'cookie');
+  const reqHeaders = { ...headers };
+  for (const k of cookieKeys) delete reqHeaders[k];
+  const cookieMap = new Map();
+  for (const str of [getCookiesForUrl(url), ...cookieKeys.map((k) => headers[k])]) {
+    for (const part of String(str || '').split(';')) {
+      const i = part.indexOf('=');
+      if (i > 0) cookieMap.set(part.slice(0, i).trim(), part.slice(i + 1).trim());
+    }
+  }
+  const mergedCookie = [...cookieMap].map(([k, v]) => `${k}=${v}`).join('; ');
+
   try {
     res = await fetch(url, {
       method,
@@ -87,9 +170,11 @@ export async function request(url, {
         'Accept-Language': lang,
         ...CLIENT_HINTS,
         ...(accept.startsWith('text/html') ? { 'Upgrade-Insecure-Requests': '1' } : {}),
-        ...headers,
+        ...(mergedCookie ? { 'Cookie': mergedCookie } : {}),
+        ...reqHeaders,
       },
     });
+    saveResponseCookies(url, res);
   } catch (e) {
     if (e.name === 'TimeoutError') throw new HttpError(`Hết thời gian chờ (${timeout}ms)`, 0);
     if (e.name === 'AbortError') throw new HttpError('Đã huỷ', 0);
@@ -106,9 +191,26 @@ export async function request(url, {
 
 // proxy: 'fallback' retries through SCRAPE_PROXY when the site blocks us; 'always' goes through it directly.
 // proxyTimeout: how long to wait for the proxy (default 70s); proxyLane 'slow' for slow proxy requests.
-export async function fetchText(url, { proxy, proxyExtra, proxyTimeout = 70000, proxyLane, ...opts } = {}) {
-  // A proxy-only source while the proxy is out of credits: fail fast with the reason.
-  if (proxy === 'always' && process.env.SCRAPE_PROXY && !proxyEnabled()) throw new HttpError(proxyDown.reason, 402);
+export async function fetchText(url, { proxy, proxyExtra, proxyTimeout = 70000, proxyLane, allowDirectFallback = false, ...opts } = {}) {
+  const downReason = () => proxyDown.reason || 'Proxy (SCRAPE_PROXY) tạm ngừng — không đọc được trang này';
+  // Direct read as a last resort; a block page is reported as the proxy problem, not returned as data.
+  const direct = async () => {
+    const res = await request(url, opts);
+    const text = await res.text();
+    if (looksBlocked(res.status, text)) throw new HttpError(proxyDown.reason || 'Bị chặn khi truy cập trực tiếp', 402);
+    return { text, url: res.url, status: res.status };
+  };
+  // A proxy-only source while the proxy is out of credits.
+  if (proxy === 'always' && process.env.SCRAPE_PROXY && !proxyEnabled()) {
+    if (allowDirectFallback) {
+      try {
+        return await direct();
+      } catch {
+        throw new HttpError(downReason(), 402);
+      }
+    }
+    throw new HttpError(downReason(), 402);
+  }
   const useProxy = proxy && proxyEnabled();
   const proxied = () => withProxySlot(proxyLane, async () => {
     const go = async () => {
@@ -133,7 +235,14 @@ export async function fetchText(url, { proxy, proxyExtra, proxyTimeout = 70000, 
     }
     return { text: await res.text(), url, status: res.status, proxied: true };
   });
-  if (useProxy && proxy === 'always') return proxied();
+  if (useProxy && proxy === 'always') {
+    try {
+      return await proxied();
+    } catch (e) {
+      if (e.status === 402 && allowDirectFallback) return direct();
+      throw e;
+    }
+  }
   try {
     const res = await request(url, opts);
     const text = await res.text();

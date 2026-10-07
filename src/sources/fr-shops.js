@@ -4,9 +4,26 @@
 import * as cheerio from 'cheerio';
 import { fetchText, HttpError } from '../lib/http.js';
 import { clean } from '../lib/normalize.js';
+import { jsonLdObjects } from '../lib/extract.js';
 
 const group = 'Shop nước ngoài';
 const lang = 'fr-FR,fr;q=0.9,en;q=0.5';
+
+// Store cookie names/values are unverified guesses.
+const AUCHAN_STORE_COOKIE = 'journey_store=142; storeId=142; postalCode=93170; journey-delivery=DRIVE; lark-consentId=true';
+
+// Euro amount with 2 decimals; null for per-unit prices ("2,50 €/kg") and anything without cents.
+const PER_UNIT = /\/\s*(kg|l)\b|\/\s*100|le kg|le litre/i;
+const euroPrice = (t) => {
+  const text = String(t ?? '');
+  if (PER_UNIT.test(text)) return null;
+  const m = text.match(/(\d+)[,.](\d{2})\s*€/);
+  return m ? Number(`${m[1]}.${m[2]}`) : null;
+};
+const plainPrice = (v) => {
+  const m = String(v ?? '').trim().match(/^(\d+)(?:[.,](\d{1,2}))?$/);
+  return m ? Number(`${m[1]}.${m[2] || '0'}`) : null;
+};
 
 export const auchan = {
   id: 'auchan',
@@ -17,7 +34,10 @@ export const auchan = {
   limit: { concurrency: 2, gap: 500 },
   filterIrrelevant: true,
   async search({ q, signal }) {
-    const { text } = await fetchText(`https://www.auchan.fr/recherche?text=${encodeURIComponent(q)}`, { signal, timeout: 10000, lang, proxy: 'fallback' });
+    const { text } = await fetchText(`https://www.auchan.fr/recherche?text=${encodeURIComponent(q)}`, {
+      signal, timeout: 10000, lang, proxy: 'fallback',
+      headers: { Cookie: AUCHAN_STORE_COOKIE },
+    });
     const $ = cheerio.load(text);
     const out = [];
     $('article[itemtype*="schema.org/Product"]').each((_, el) => {
@@ -28,11 +48,22 @@ export const auchan = {
       if (!href || !title) return;
       const rating = Number($el.find('[itemprop="ratingValue"]').attr('content') || 0) || null;
       const reviews = Number($el.find('[itemprop="reviewCount"], [itemprop="ratingCount"]').attr('content') || 0) || null;
+
+      // "Afficher le prix" buttons also have price-like classes: only a real amount counts.
+      let price = plainPrice($el.find('[itemprop="price"]').attr('content'));
+      if (price == null) {
+        $el.find('[class*="price"]').each((__, p) => {
+          if (/see-prices/.test($(p).attr('class') || '')) return;
+          price = euroPrice($(p).text());
+          if (price != null) return false;
+        });
+      }
+
       out.push({
         title,
         url: new URL(href, 'https://www.auchan.fr').href,
         image: $el.find('meta[itemprop="image"]').attr('content') || null,
-        price: null, // shown only once a store is chosen
+        price,
         currency: 'EUR',
         rating,
         reviews,
@@ -42,6 +73,31 @@ export const auchan = {
     });
     if (!out.length && text.length < 40000) throw new HttpError('Auchan trả về trang chặn (tạm thời)', 429);
     return out;
+  },
+  detailNeeds: (item) => item.price == null,
+  async detail(item, { signal }) {
+    if (!item.url) return {};
+    try {
+      // Direct only: no proxy credits for per-product requests.
+      const { text } = await fetchText(item.url, {
+        signal, timeout: 10000, lang,
+        headers: { Cookie: AUCHAN_STORE_COOKIE },
+      });
+      const $ = cheerio.load(text);
+      let price = plainPrice($('[itemprop="price"]').attr('content'));
+      if (price == null) {
+        for (const o of jsonLdObjects($)) {
+          for (const offer of [].concat(o.offers || [])) {
+            price = plainPrice(offer?.price ?? offer?.lowPrice);
+            if (price != null) break;
+          }
+          if (price != null) break;
+        }
+      }
+      return price ? { price } : {};
+    } catch {
+      return {};
+    }
   },
 };
 
