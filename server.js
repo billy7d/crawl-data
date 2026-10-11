@@ -14,7 +14,8 @@ import { jsonStore } from './src/lib/store.js';
 import { request, mapLimit, proxyStatus } from './src/lib/http.js';
 import { clean, fold } from './src/lib/normalize.js';
 import { CooldownError } from './src/lib/limiter.js';
-import { runSearch } from './src/lib/run.js';
+import { searchSource } from './src/lib/run.js';
+import { browserState, setConsent, resetConsent, waitConsent, newSession, closeSession, closeBrowser, configureBrowser } from './src/lib/browser.js';
 import { checkProduct, createContext } from './src/lib/importcheck.js';
 import { bestsellers, BESTSELLER_MARKETS } from './src/lib/bestsellers.js';
 import { recordListings, listTracked, dueTracked, track, untrack, saveCheck, stats as salesStats, listImporters } from './src/lib/sales.js';
@@ -27,6 +28,8 @@ try {
 const PORT = Number(process.env.PORT) || 3000;
 const ENRICH_CONCURRENCY = 10;
 const SESSION_DEADLINE_MS = 45000;
+// Pages read in the user's browser are slower and may wait for the user to sign in or pass a check.
+const BROWSER_DEADLINE_MS = 240000;
 // How many top rows per source get their product page fetched for details.
 // The browser asks for the rest of the visible rows afterwards (/api/details), so these only need to cover
 // the first screen. Per-host throttles keep each shop at a polite rate.
@@ -110,17 +113,40 @@ app.get('/api/search', async (req, res) => {
   let pendingTasks = tasks.length;
   let finished = false;
 
+  // Real-browser fallback for shops that block us (asked once per server run, see lib/browser.js).
+  const bsession = newSession();
+  let consentAsked = false;
+  const browser = {
+    session: bsession,
+    consent: () => waitConsent(ac.signal, () => {
+      if (consentAsked) return;
+      consentAsked = true;
+      send('browser-consent', browserState());
+    }),
+    onAttention: (info) => send('browser-attention', info),
+    onStart: () => bsession.active++,
+    onEnd: () => bsession.active--,
+  };
+
   const finish = () => {
     if (finished) return;
     finished = true;
     clearTimeout(deadline);
+    // Pages still open or waiting for the user belong to this search only: stop them and close their tabs.
+    if (bsession.active) ac.abort();
+    closeSession(bsession).catch(() => {});
     send('done', { total: items.size, ms: Date.now() - t0, proxy: proxyStatus() });
     res.end();
     const h = history.get().filter((e) => !(e.q.toLowerCase() === q.toLowerCase() && e.markets.join() === markets.join()));
     h.unshift({ q, markets, sources: want, t: Date.now(), count: items.size });
     history.set(h.slice(0, 100));
   };
-  const deadline = setTimeout(finish, SESSION_DEADLINE_MS);
+  // The usual deadline, stretched while pages are still being read in the browser.
+  const onDeadline = () => {
+    if (bsession.active > 0 && Date.now() - t0 < BROWSER_DEADLINE_MS && !ac.signal.aborted) deadline = setTimeout(onDeadline, 3000);
+    else finish();
+  };
+  let deadline = setTimeout(onDeadline, SESSION_DEADLINE_MS);
   const maybeFinish = () => {
     if (!pendingTasks && !active && !queue.length) finish();
   };
@@ -161,15 +187,21 @@ app.get('/api/search', async (req, res) => {
     const ctx = { market: t.market, queries: [...new Set([q, query])] };
     send('task', { source: t.src.id, market: t.market, status: 'running', query });
     try {
-      const { value: raw, cached, key } = await runSearch(t.src, t.market, query, { signal: ac.signal, fresh });
+      const { value: raw, cached, key, via } = await searchSource(t.src, t.market, query, { signal: ac.signal, fresh, browser });
       const out = [];
       let irrelevant = 0;
+      let offForm = 0;
       // A shop's own search engine already judged its top hits relevant, even when the title lacks our words.
       const trusted = t.src.kind !== 'web' && !t.src.filterIrrelevant;
       raw.forEach((r, pos) => {
         const relBonus = trusted ? (pos < 24 ? 0.45 : 0.2) : 0;
         const it = makeItem({ ...r, source: t.src.id, kind: t.src.kind, market: t.market, relBonus }, ctx);
         it.pos = pos;
+        // Same flavour, different product ("bánh quy phô mai" for "thanh phô mai"): even a shop's own top hits go.
+        if (it.offForm) {
+          offForm++;
+          return;
+        }
         if (t.src.kind === 'web' || t.src.dedupe) {
           // Engines under bot suspicion return off-topic pages; drop rows that match none of the query.
           if (it.relevance < 0.3) {
@@ -202,7 +234,7 @@ app.get('/api/search', async (req, res) => {
       const warn = raw.length && !out.length && irrelevant ? 'Kết quả không liên quan — nguồn có thể đang giới hạn tạm thời' : null;
       // Empty or all-junk answers are often a soft block: don't keep them for hours, retry next time.
       if (!raw.length || warn) del(key);
-      send('task', { source: t.src.id, market: t.market, status: warn ? 'warn' : 'done', count: out.length, ms: Date.now() - start, cached, query, warn, hidden: irrelevant });
+      send('task', { source: t.src.id, market: t.market, status: warn ? 'warn' : 'done', count: out.length, ms: Date.now() - start, cached, query, warn, hidden: irrelevant, offForm, via });
       if (doEnrich) enqueue(out, t.src, ctx);
     } catch (e) {
       send('task', { source: t.src.id, market: t.market, status: e instanceof CooldownError ? 'cooldown' : 'error', error: e.message, ms: Date.now() - start, query });
@@ -430,7 +462,7 @@ function guardSettings(req, res, next) {
 const providersPublic = () => Object.fromEntries(Object.entries(PROXY_PROVIDERS).map(([k, p]) => [k, { name: p.name, signup: p.signup }]));
 
 app.get('/api/settings', (req, res) => {
-  res.json({ fields: readSettings(), providers: providersPublic(), editable: isLocal(req) || !!process.env.SETTINGS_TOKEN, proxy: proxyStatus() });
+  res.json({ fields: readSettings(), providers: providersPublic(), editable: isLocal(req) || !!process.env.SETTINGS_TOKEN, proxy: proxyStatus(), browser: browserState() });
 });
 
 app.put('/api/settings', guardSettings, (req, res) => {
@@ -441,11 +473,28 @@ app.put('/api/settings', guardSettings, (req, res) => {
   } catch (e) {
     return res.status(500).json({ error: `Không ghi được file .env: ${e.message}` });
   }
-  res.json({ fields: readSettings(), sources: describe() });
+  res.json({ fields: readSettings(), sources: describe(), browser: browserState() });
 });
 
 app.post('/api/settings/test', guardSettings, async (req, res) => {
   res.json(await testSetting(String(req.body?.kind || ''), req.body || {}));
+});
+
+// ---------------- Real browser (sites that block bots) ----------------
+
+app.get('/api/browser', (req, res) => res.json(browserState()));
+
+// Opening the user's browser is the user's call, made on this machine from this app's page (same guard as keys).
+// allow: true / false for the rest of this server run; reset: ask again next time.
+app.post('/api/browser/consent', guardSettings, (req, res) => {
+  if (req.body?.reset) resetConsent();
+  else setConsent(!!req.body?.allow);
+  res.json({ ...browserState(), sources: describe() });
+});
+
+app.post('/api/browser/close', guardSettings, async (req, res) => {
+  await closeBrowser();
+  res.json(browserState());
 });
 
 // ---------------- History / meta / misc ----------------
@@ -514,6 +563,7 @@ app.get('/api/meta', (req, res) => {
     countries: COUNTRY_NAMES,
     bestsellerMarkets: Object.keys(BESTSELLER_MARKETS),
     proxy: proxyStatus(),
+    browser: browserState(),
     rates: rates(),
   });
 });
@@ -552,11 +602,15 @@ setInterval(loadRates, 6 * 3600e3).unref();
 setInterval(() => runRecheck().catch(() => {}), 3600e3).unref();
 setTimeout(() => runRecheck().catch(() => {}), 60e3).unref();
 
+configureBrowser({ homeUrl: `http://localhost:${PORT}/browser.html` });
+
 const server = app.listen(PORT, () => {
   const off = SOURCES.filter((s) => !enabled(s)).map((s) => `${s.name} (cần ${s.needsKey})`);
   console.log(`\n  Ăn Dặm Radar đang chạy: http://localhost:${PORT}`);
   console.log(`  Nguồn bật: ${SOURCES.filter(enabled).map((s) => s.name).join(', ')}`);
   if (off.length) console.log(`  Nguồn tắt: ${off.join(', ')}`);
+  const b = browserState();
+  console.log(`  Trình duyệt thật cho trang chặn bot: ${b.mode === 'off' ? 'tắt' : b.browser ? `${b.browser}, tối đa ${b.tabs} tab cùng lúc (máy ${b.cores} nhân, ${b.memGB} GB RAM) — hỏi trước khi mở` : 'không tìm thấy Chrome/Edge/Brave'}`);
   console.log(`  Tỷ giá: ${rates().source}${rates().updated ? ' — ' + rates().updated : ''}\n`);
 });
 
@@ -572,6 +626,7 @@ server.on('error', (e) => {
 const shutdown = () => {
   history.flushNow();
   watch.flushNow();
+  closeBrowser().catch(() => {});
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 1000).unref();
 };

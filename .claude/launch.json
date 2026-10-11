@@ -4,8 +4,11 @@
     {
       "name": "an-dam-radar",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["server.js"],
-      "port": 3000
+      "runtimeArgs": [
+        "server.js"
+      ],
+      "port": 3000,
+      "autoPort": true
     }
   ]
 }

@@ -39,7 +39,8 @@ export function set(key, value, ttlMs) {
 
 export function del(key) {
   mem.delete(key);
-  fs.rm(file(key), { force: true }, () => {});
+  // Synchronous: a "fresh" search deletes then reads at once, and must not find the old file still there.
+  fs.rmSync(file(key), { force: true });
 }
 
 // Returns cached value or computes it once even if called concurrently.

@@ -3,8 +3,8 @@ import { hash } from './cache.js';
 import { toVND } from './currency.js';
 import { countryFromCurrency, countryFromText, countryFromUrl, hostOf } from './markets.js';
 import {
-  NON_FOOD, fold, clean, detectAllergens, detectClaims, detectType, guessBrand, normalizeBrand, parseAgeMonths,
-  parsePrice, parseQuantity, relevance, truncate,
+  NON_FOOD, fold, clean, detectAllergens, detectClaims, detectType, formMatch, guessBrand, normalizeBrand, parseAgeMonths,
+  parsePrice, parseQuantity, productForms, relevanceDetail, truncate,
 } from './normalize.js';
 
 export function parseSold(s) {
@@ -96,8 +96,19 @@ export function finalize(item, ctx) {
   }
   item.originCountry = countryFromText(item.origin || s.origin) || null;
   if (ctx?.queries) {
-    const r = relevance(item.title, `${item.snippet || ''} ${item.description || ''}`, ctx.queries);
-    item.relevance = Math.round(Math.min(1.4, r + (item.relBonus || 0)) * 100) / 100;
+    const { score: r, split } = relevanceDetail(item.title, `${item.snippet || ''} ${item.description || ''}`, ctx.queries);
+    // The form word in the user's own query ("thanh" in "thanh phô mai") decides what product it is.
+    ctx.forms ??= productForms(ctx.queries[0]);
+    // A shop's trust bonus covers titles in another wording, not a bar with none of "phô mai" in it.
+    const trust = split || (ctx.forms.size && r < 0.3) ? 0 : item.relBonus || 0;
+    let rel = Math.min(1.4, r + trust);
+    const form = formMatch(item.title, ctx.forms);
+    item.offForm = form === 'other';
+    if (form === 'match' && r >= 0.3) rel = Math.min(1.4, rel + 0.15);
+    else if (form === 'other') rel = Math.min(rel, 0.15);
+    // Names no form at all ("Phô mai Labanita"): may or may not be what was asked, hidden by "ít liên quan".
+    else if (ctx.forms.size && !productForms(item.title).size) rel = Math.min(rel, 0.44);
+    item.relevance = Math.round(rel * 100) / 100;
   }
   return item;
 }

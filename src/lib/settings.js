@@ -40,6 +40,8 @@ export function readSettings() {
     SEARCH_CACHE_HOURS: { value: Number(e.SEARCH_CACHE_HOURS || 6) },
     SALES_CHECK_HOURS: { value: Number(e.SALES_CHECK_HOURS || 24) },
     SEARCH_DEPTH: { value: Math.min(3, Math.max(1, Number(e.SEARCH_DEPTH) || 2)) },
+    BROWSER_MODE: { value: e.BROWSER_MODE === 'off' ? 'off' : 'ask' },
+    BROWSER_TABS: { value: Number(e.BROWSER_TABS) >= 1 ? Number(e.BROWSER_TABS) : 0 }, // 0 = sized to the machine
   };
 }
 
@@ -94,6 +96,15 @@ export function validate(body) {
     const n = Number(body.SEARCH_DEPTH);
     if (![1, 2, 3].includes(n)) errors.push('Độ phủ tìm kiếm phải là 1, 2 hoặc 3');
     else changes.SEARCH_DEPTH = String(n);
+  }
+  if ('BROWSER_MODE' in body) {
+    if (!['ask', 'off'].includes(body.BROWSER_MODE)) errors.push('Chế độ trình duyệt không hợp lệ.');
+    else changes.BROWSER_MODE = body.BROWSER_MODE === 'off' ? 'off' : null;
+  }
+  if ('BROWSER_TABS' in body) {
+    const n = Number(body.BROWSER_TABS);
+    if (!(Number.isInteger(n) && n >= 0 && n <= 6)) errors.push('Số tab trình duyệt phải từ 1 đến 6 (0 = tự động).');
+    else changes.BROWSER_TABS = n ? String(n) : null;
   }
   if ('SALES_CHECK_HOURS' in body) {
     const n = Number(body.SALES_CHECK_HOURS);

@@ -13,10 +13,12 @@ import naver from './naver.js';
 import { amazon, target, sainsburys, tesco, waitrose, morrisons, woolworths, dm, fairprice } from './global-shops.js';
 import { google, googleShopping } from './serper.js';
 import { searxng, brave } from './metasearch.js';
+import { shopee } from './browser-shops.js';
+import { browserUsable } from '../lib/browser.js';
 
 export const SOURCES = [
   // Vietnam
-  tiki, lazada, concung, kidsplaza,
+  tiki, lazada, concung, kidsplaza, shopee,
   // Foreign retailers (direct)
   amazon, target, tesco, sainsburys, waitrose, morrisons, woolworths, dm, fairprice, monoprix, auchan, chronodrive, carrefour, leclerc, ...moreShops, ...apiShops, naver, bingshop,
   // Retailers that block bots: via search-engine index, or via the optional scraping proxy
@@ -27,7 +29,10 @@ export const SOURCES = [
 export const byId = Object.fromEntries(SOURCES.map((s) => [s.id, s]));
 
 export const supports = (src, market) => src.markets === '*' || src.markets.includes(market);
-export const enabled = (src) => !src.needsKey || !!process.env[src.needsKey];
+// Proxy-only shops and browser-only shops are also on while the user's own browser can stand in for them.
+export const enabled = (src) => (src.browserOnly
+  ? browserUsable()
+  : !src.needsKey || !!process.env[src.needsKey] || (src.needsKey === 'SCRAPE_PROXY' && browserUsable()));
 
 // Public description for the UI.
 export const describe = () => SOURCES.map((s) => ({
@@ -39,4 +44,5 @@ export const describe = () => SOURCES.map((s) => ({
   global: !!s.global,
   enabled: enabled(s),
   needsKey: s.needsKey || null,
+  browserOnly: !!s.browserOnly,
 }));

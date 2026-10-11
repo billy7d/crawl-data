@@ -1,4 +1,5 @@
 // HTTP helpers: timeout, browser-like headers, abort propagation, optional scraping-proxy fallback.
+import { browserFetch, browserUsable, inBrowser } from './browser.js';
 
 // One consistent Chrome identity: UA and client hints must agree, or bot filters (Akamai, PerimeterX) notice.
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36';
@@ -51,6 +52,8 @@ async function withProxySlot(lane, fn) {
     w.forEach((r) => r());
   }
 }
+
+const isGet = (opts) => (!opts.method || opts.method === 'GET') && opts.body == null;
 
 export class HttpError extends Error {
   constructor(message, status) {
@@ -192,6 +195,8 @@ export async function request(url, {
 // proxy: 'fallback' retries through SCRAPE_PROXY when the site blocks us; 'always' goes through it directly.
 // proxyTimeout: how long to wait for the proxy (default 70s); proxyLane 'slow' for slow proxy requests.
 export async function fetchText(url, { proxy, proxyExtra, proxyTimeout = 70000, proxyLane, allowDirectFallback = false, ...opts } = {}) {
+  // A search re-run in the user's browser (see run.js): read the page there instead.
+  if (inBrowser() && isGet(opts)) return browserFetch(url, { lang: opts.lang });
   const downReason = () => proxyDown.reason || 'Proxy (SCRAPE_PROXY) tạm ngừng — không đọc được trang này';
   // Direct read as a last resort; a block page is reported as the proxy problem, not returned as data.
   const direct = async () => {
@@ -247,6 +252,8 @@ export async function fetchText(url, { proxy, proxyExtra, proxyTimeout = 70000, 
     const res = await request(url, opts);
     const text = await res.text();
     if (useProxy && looksBlocked(res.status, text)) return proxied();
+    // A bot wall served as a normal page: report it, so the search can be retried in the real browser.
+    if (!useProxy && looksBlocked(res.status, text) && browserUsable()) throw new HttpError('Trang chặn bot (cần trình duyệt thật)', 403);
     return { text, url: res.url, status: res.status };
   } catch (e) {
     if (useProxy && [202, 403, 429, 503].includes(e.status)) return proxied();
@@ -257,7 +264,9 @@ export async function fetchText(url, { proxy, proxyExtra, proxyTimeout = 70000, 
 export async function fetchJSON(url, opts = {}) {
   let text;
   let status;
-  if (opts.proxy) {
+  if (inBrowser() && isGet(opts)) {
+    ({ text, status } = await browserFetch(url, { json: true, lang: opts.lang }));
+  } else if (opts.proxy) {
     // Through fetchText so a captcha page (HTML instead of JSON) can be retried via SCRAPE_PROXY.
     const r = await fetchText(url, { accept: 'application/json, text/plain, */*', ...opts });
     ({ text, status } = r);

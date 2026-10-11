@@ -140,6 +140,27 @@ Các chuỗi bán lẻ lớn dùng hệ thống chống bot (Akamai, PerimeterX,
 
 Cài đặt chỉ chỉnh được từ chính máy chạy app. Nếu đưa app lên máy chủ, đặt thêm `SETTINGS_TOKEN` trong `.env` để quản trị từ xa.
 
+### Đọc bằng trình duyệt thật của bạn (bán tự động)
+
+Khi một shop chặn bot, hoặc nguồn cần proxy mà proxy chưa cấu hình/hết lượt, app có thể mở **Chrome (hoặc Edge, Brave) trên máy bạn**, đọc trang kết quả như khi bạn tự mở, rồi gộp vào bảng. Shopee chỉ đọc được theo cách này.
+
+- **Hỏi một lần cho mỗi lần chạy server.** Lần đầu cần đến trình duyệt, app hiện hộp "Mở trình duyệt để đọc trang chặn bot?". Đồng ý thì các lần tìm sau dùng luôn, không hỏi lại cho tới khi tắt server. Từ chối thì các nguồn chỉ đọc được bằng trình duyệt sẽ ẩn trong phiên đó. Đổi lại trong ⚙ Cài đặt → **Trình duyệt thật cho trang chặn bot** (Thu hồi / Cho phép / Tắt hẳn).
+- **Theo cấu hình máy.** Số tab mở cùng lúc tính từ số nhân CPU và RAM (khoảng 4 nhân và 6 GB cho mỗi tab, tối đa 4; ví dụ máy 10 nhân 16 GB mở 2 tab). Có thể chọn tay 1–6 tab. Khi máy đang quá tải, app chờ rồi mới mở thêm tab. Tab đọc không tải ảnh, video, phông chữ, và chạy ở chế độ nền nên không giành cửa sổ của bạn.
+- **Đóng ngay khi xong.** Mỗi tab đóng ngay sau khi đọc xong trang. Tìm xong (hoặc bấm Dừng) thì đóng hết tab của lượt tìm đó. Trình duyệt tự tắt sau 60 giây không dùng (`BROWSER_IDLE_SECONDS`), và tắt cùng server.
+- **Đăng nhập và captcha do bạn làm.** Khi trang cần đăng nhập (Shopee) hoặc hiện captcha, tab đó tự hiện lên phía trước và app báo trên giao diện. Bạn làm xong thì app đọc tiếp, tối đa chờ 150 giây (`BROWSER_USER_WAIT_SECONDS`). Đóng tab đó nghĩa là bỏ qua shop này. App **không** tự giải captcha.
+- **Hồ sơ trình duyệt riêng** ở `data/browser-profile`, tách khỏi Chrome bạn dùng hằng ngày (Chrome không cho điều khiển hồ sơ chính). Đăng nhập và cookie xác minh được giữ cho lần sau, nên thường chỉ phải làm một lần.
+
+Đã thử (11/10/2026): Walmart, iHerb, Carrefour (FR), Amazon US, Lazada, Tiki đọc được qua trình duyệt. Walmart Canada, Loblaws, Kroger, Chronodrive, Shoppers, Kaufland, Gmarket, Carrefour.it hiện captcha, cần bạn xác minh. Shopee cần đăng nhập. Bộ đọc Shopee viết theo cấu trúc link sản phẩm (`…-i.<shop>.<item>`) và **chưa kiểm tra được trên trang kết quả thật** vì cần tài khoản. Coles, Yahoo!ショッピング, SSG trả trang trống hoặc báo không phục vụ khu vực này, kể cả khi mở bằng trình duyệt.
+
+Kiểm tra một trang hoặc một nguồn qua trình duyệt:
+
+```bash
+npm run test:browser -- "https://www.walmart.com/search?q=baby%20food"
+node scripts/test-browser-sources.js walmart:us carrefour:fr "bánh ăn dặm"
+```
+
+Đặt `BROWSER_DEBUG=1` trong `.env` để xem từng bước trong cửa sổ chạy server.
+
 ## Tình trạng nguồn dữ liệu (kiểm tra ngày 06/10/2026)
 
 Trang web đổi giao diện và hệ thống chống bot liên tục, nên bảng dưới là ảnh chụp tại thời điểm kiểm tra, không phải cam kết. Cách kiểm tra lại từng nguồn: `npm run test:sources -- "từ khóa"`.
@@ -220,6 +241,11 @@ Kết quả lần thử không kết luận được (lỗi 404 do đoán sai đ
 
 ## Nhật ký cập nhật
 
+**11/10/2026**
+- **Đọc bằng trình duyệt thật** (bán tự động) cho shop chặn bot và nguồn cần proxy khi proxy hết lượt. Hỏi một lần mỗi phiên server, số tab theo cấu hình máy, đóng tab ngay khi đọc xong, đăng nhập/captcha do người dùng làm. Thêm nguồn **Shopee** (chỉ qua trình duyệt).
+- **Tìm kiếm chính xác hơn theo dạng sản phẩm:** "thanh phô mai" chỉ ra phô mai thanh/que, không ra bánh quy hay burger phô mai. Âm tiết tiếng Việt phải đi liền nhau ("phô mai" khác "ô mai thanh mai").
+- "Tìm mới" không còn đọc nhầm kết quả cũ trong cache.
+
 **06/10/2026**
 - Tích hợp **Naver Shopping API** (Hàn Quốc): thẻ cài đặt riêng với ô Client ID/Secret, nút Kiểm tra khóa, lưu vào `.env` (ẩn khóa khi hiển thị).
 - Thêm **Asda** và **Boots** (Anh) qua API Algolia công khai của chính trang (tìm ra bằng cách mở trang trong trình duyệt thật): Asda có giá, sao, quy cách; Boots có UPC, giá, đánh giá.
@@ -244,7 +270,7 @@ Kết quả lần thử không kết luận được (lỗi 404 do đoán sai đ
 
 - Tra cứu đăng ký sản phẩm của Cục An toàn thực phẩm: trang tra cứu chính thức (`congbosanpham.vfa.gov.vn`, `nghidinh15.vfa.gov.vn`) chuyển hướng lỗi hoặc chặn truy cập tự động.
 - Tích hợp Shopee Affiliate Open API (cần khóa do bạn đăng ký).
-- Tiện ích Chrome cho các trang chặn bot.
+- Tiện ích Chrome cho các trang chặn bot (đã có cách khác: đọc bằng trình duyệt thật, xem trên).
 
 ## Cấu trúc mã
 
@@ -257,6 +283,8 @@ src/lib/item.js           Chuẩn hoá thành dòng dữ liệu cho giao diện,
 src/lib/enrich.js         Đọc trang chi tiết sản phẩm (có cache 24h)
 src/lib/limiter.js        Giới hạn tốc độ theo nguồn + tạm nghỉ khi bị chặn
 src/lib/translate.js      Dịch từ khoá (Google Translate web, dự phòng MyMemory) + thuật ngữ ăn dặm
+src/lib/browser.js        Đọc trang bằng Chrome/Edge/Brave thật qua DevTools: xin phép, giới hạn tab theo máy, đóng tab
+src/lib/run.js            Chạy một nguồn (cache, giới hạn tốc độ) và chạy lại bằng trình duyệt khi bị chặn
 public/                   Giao diện (HTML/CSS/JS thuần, không cần build)
 data/                     Cache, danh sách theo dõi, lịch sử (tự tạo)
 ```

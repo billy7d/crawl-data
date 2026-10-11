@@ -425,6 +425,13 @@ function startSearch(q, { fresh = $('#opt-fresh').checked } = {}) {
     S.tasks.set(`${d.source}:${d.market}`, d);
     renderStatus();
   });
+  es.addEventListener('browser-consent', (e) => openBrowserConsent(JSON.parse(e.data)));
+  es.addEventListener('browser-attention', (e) => {
+    const d = JSON.parse(e.data);
+    toast(d.reason === 'done'
+      ? `${d.host}: đã xác minh xong, đang đọc tiếp`
+      : `${d.host} cần bạn ${d.reason === 'login' ? 'đăng nhập' : 'xác minh'} trong cửa sổ trình duyệt vừa hiện lên — app tự đọc tiếp khi xong`, d.reason === 'done' ? 3000 : 15000);
+  });
   es.addEventListener('translation', (e) => {
     const d = JSON.parse(e.data);
     S.translations[d.lang] = d.text;
@@ -498,8 +505,8 @@ function renderStatus() {
     const detail = t.status === 'done' || t.status === 'warn'
       ? `${t.count} <span class="ms">${t.cached ? 'cache' : `${(t.ms / 1000).toFixed(1)}s`}</span>`
       : t.status === 'error' || t.status === 'cooldown' ? '<span class="ms">lỗi</span>' : t.status === 'stopped' ? '<span class="ms">đã dừng</span>' : '';
-    const title = t.error || t.warn || (t.query ? `Từ khóa: ${t.query}` : '');
-    return `<span class="task ${t.status}" title="${esc(title)}"><span class="dot"></span>${esc(label(t))} ${detail}</span>`;
+    const title = t.error || t.warn || [t.via === 'browser' && 'Đọc bằng trình duyệt thật', t.query && `Từ khóa: ${t.query}`, t.offForm && `Đã ẩn ${t.offForm} sản phẩm khác loại`].filter(Boolean).join(' · ');
+    return `<span class="task ${t.status}" title="${esc(title)}"><span class="dot"></span>${t.via === 'browser' ? '🌐 ' : ''}${esc(label(t))} ${detail}</span>`;
   }).join('');
 }
 
@@ -1670,6 +1677,62 @@ const SETTING_CARDS = [
 
 let settingsData = null;
 
+// ---------- Real browser for sites that block bots (asked once per server run) ----------
+const tabsNote = (b) => `Máy bạn có ${b.cores} nhân, ${b.memGB} GB RAM → mở tối đa <b>${b.tabs}</b> tab cùng lúc${b.tabs === b.auto ? ' (tự động)' : ''}`;
+
+function openBrowserConsent(b) {
+  $('#browser-consent-body').innerHTML = `
+    <p class="muted small">Một số shop chặn bot hoặc đang không đọc được qua proxy. App có thể mở <b>${esc(b.browser || 'Chrome')}</b> trên máy bạn, đọc trang kết quả như khi bạn tự mở, rồi gộp vào bảng.</p>
+    <ul class="muted small">
+      <li>Dùng hồ sơ trình duyệt riêng của app, tách khỏi trình duyệt hằng ngày của bạn.</li>
+      <li>${tabsNote(b)}; không tải ảnh/video để máy không bị lag.</li>
+      <li>Mỗi tab tự đóng khi đọc xong; tìm xong thì đóng hết, trình duyệt tự tắt sau một lúc.</li>
+      <li>Trang cần đăng nhập hoặc captcha: tab đó hiện lên để <b>bạn</b> tự làm. App không tự giải captcha.</li>
+    </ul>
+    <p class="small">Đồng ý một lần là dùng cho tới khi tắt server (đổi lại được trong ⚙ Cài đặt).</p>`;
+  $('#browser-consent').hidden = false;
+}
+
+async function answerBrowserConsent(allow) {
+  $('#browser-consent').hidden = true;
+  try {
+    const d = await api('/api/browser/consent', { method: 'POST', body: { allow } });
+    S.meta.browser = d;
+    S.meta.sources = d.sources;
+    S.srcName = Object.fromEntries(S.meta.sources.map((s) => [s.id, s.name]));
+    renderSources();
+    toast(allow ? 'Đã cho phép — các trang chặn bot sẽ được đọc bằng trình duyệt' : 'Không mở trình duyệt trong phiên này');
+  } catch (e) {
+    toast(`Lỗi: ${e.message}`);
+  }
+}
+
+function browserCard() {
+  const b = settingsData.browser || {};
+  const mode = settingsData.fields.BROWSER_MODE?.value || 'ask';
+  const tabs = settingsData.fields.BROWSER_TABS?.value || 0;
+  const consent = { granted: 'Đã cho phép trong phiên này', denied: 'Đã từ chối trong phiên này', null: 'Chưa hỏi' }[b.consent ?? 'null'];
+  return `<div class="set-card ${b.browser && mode !== 'off' ? 'on' : ''}" data-kind="browser">
+      <div class="set-head"><h3>Trình duyệt thật cho trang chặn bot</h3>${b.browser ? `<span class="badge ${mode === 'off' ? 'off' : 'on'}">${esc(b.browser)}</span>` : '<span class="badge off">Không tìm thấy Chrome/Edge/Brave</span>'}</div>
+      <p class="muted small">Khi một shop chặn bot (Shopee, Walmart, Carrefour…) hoặc proxy hết lượt, app mở trình duyệt trên máy bạn để đọc trang kết quả. Hỏi bạn một lần cho mỗi lần chạy server. ${b.browser ? tabsNote(b) + '.' : ''}</p>
+      <div class="set-row">
+        <select name="BROWSER_MODE" aria-label="Chế độ trình duyệt" style="flex:0 1 220px">
+          <option value="ask" ${mode === 'ask' ? 'selected' : ''}>Bật (hỏi trước khi mở)</option>
+          <option value="off" ${mode === 'off' ? 'selected' : ''}>Tắt</option>
+        </select>
+        <select name="BROWSER_TABS" aria-label="Số tab cùng lúc" style="flex:0 1 200px">
+          <option value="0" ${!tabs ? 'selected' : ''}>Tự động theo máy (${b.auto ?? 1} tab)</option>
+          ${[1, 2, 3, 4, 5, 6].map((n) => `<option value="${n}" ${tabs === n ? 'selected' : ''}>${n} tab cùng lúc</option>`).join('')}
+        </select>
+      </div>
+      <div class="set-row" style="margin-top:8px">
+        <span class="small muted">${esc(consent)}${b.running ? ` · đang mở${b.working ? `, đọc ${b.working} trang` : ''}` : ''}</span>
+        ${b.consent === 'granted' ? '<button type="button" class="btn small ghost" data-browser="revoke">Thu hồi</button>' : b.browser && mode !== 'off' ? '<button type="button" class="btn small" data-browser="allow">Cho phép trong phiên này</button>' : ''}
+        ${b.running ? '<button type="button" class="btn small ghost" data-browser="close">Đóng trình duyệt</button>' : ''}
+      </div>
+    </div>`;
+}
+
 async function openSettings() {
   $('#settings').hidden = false;
   $('#settings-form').innerHTML = '<div class="skeleton" style="height:120px;margin-top:12px"></div>';
@@ -1737,7 +1800,7 @@ function renderSettings() {
     </div>`;
   }).join('');
   const proxyWarn = settingsData.proxy?.down ? `<div class="set-card"><p class="set-msg err">${esc(settingsData.proxy.reason)}</p></div>` : '';
-  $('#settings-form').innerHTML = `${proxyWarn}${cards}
+  $('#settings-form').innerHTML = `${proxyWarn}${cards}${browserCard()}
     <div class="set-card">
       <div class="set-head"><h3>Thời gian lưu tạm kết quả</h3></div>
       <p class="muted small">Tìm lại cùng từ khóa trong khoảng này sẽ gần như tức thì và đỡ bị chặn hơn.</p>
@@ -1783,6 +1846,8 @@ function settingsPayload(form, only) {
   if (!only && Number(v('SEARCH_CACHE_HOURS')) !== settingsData.fields.SEARCH_CACHE_HOURS.value) body.SEARCH_CACHE_HOURS = v('SEARCH_CACHE_HOURS');
   if (!only && settingsData.fields.SEARCH_DEPTH && Number(v('SEARCH_DEPTH')) !== settingsData.fields.SEARCH_DEPTH.value) body.SEARCH_DEPTH = v('SEARCH_DEPTH');
   if (!only && Number(v('SALES_CHECK_HOURS')) !== settingsData.fields.SALES_CHECK_HOURS.value) body.SALES_CHECK_HOURS = v('SALES_CHECK_HOURS');
+  if (!only && form.elements.BROWSER_MODE && v('BROWSER_MODE') !== settingsData.fields.BROWSER_MODE?.value) body.BROWSER_MODE = v('BROWSER_MODE');
+  if (!only && form.elements.BROWSER_TABS && Number(v('BROWSER_TABS')) !== settingsData.fields.BROWSER_TABS?.value) body.BROWSER_TABS = v('BROWSER_TABS');
   return body;
 }
 
@@ -1801,6 +1866,7 @@ async function saveSettings(body, okMsg) {
   }
   renderSources();
   settingsData.fields = d.fields;
+  if (d.browser) settingsData.browser = d.browser;
   renderSettings();
   toast(added.length ? `${okMsg} Đã bật thêm: ${added.map((s) => s.name).join(', ')}.` : okMsg, 4500);
 }
@@ -1812,8 +1878,31 @@ function bindSettings() {
     e.target.closest('details')?.removeAttribute('open');
     openSettings();
   });
+  $('#browser-consent').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-consent]');
+    if (b) answerBrowserConsent(b.dataset.consent === '1');
+  });
   $('#settings').addEventListener('click', async (e) => {
     if (e.target.closest('[data-close-settings]')) return closeSettings();
+    const br = e.target.closest('[data-browser]');
+    if (br) {
+      const act = br.dataset.browser;
+      try {
+        const d = act === 'close'
+          ? await api('/api/browser/close', { method: 'POST', body: {} })
+          : await api('/api/browser/consent', { method: 'POST', body: act === 'allow' ? { allow: true } : { reset: true } });
+        settingsData.browser = d;
+        if (d.sources) {
+          S.meta.sources = d.sources;
+          S.srcName = Object.fromEntries(S.meta.sources.map((s) => [s.id, s.name]));
+          renderSources();
+        }
+        renderSettings();
+      } catch (err) {
+        toast(`Lỗi: ${err.message}`);
+      }
+      return;
+    }
     const reveal = e.target.closest('[data-reveal]');
     if (reveal) {
       const inputs = $$('input[type=password], input[data-revealed]', reveal.closest('.set-card'));

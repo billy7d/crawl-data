@@ -253,15 +253,130 @@ function matches(t, hay, words) {
   return false;
 }
 
-export function relevance(title, text, queries) {
+// ---------- Product form ----------
+const VI_MARKS = /[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]/i;
+// Word matching alone can't tell "thanh phô mai" (cheese sticks) from "bánh quy phô mai" (cheese biscuits):
+// both share "phô mai". The form word is what the shopper actually asked for, so a title naming a different
+// form and none of the query's is a different product. Terms are matched on accented lowercase text so
+// Vietnamese "mì" doesn't hit Spanish "mi"; Latin terms also take a plural s/es.
+const FORMS = {
+  stick: ['thanh', 'que', 'stick', 'string', 'string cheese', 'cheestrings', 'bar', 'riegel', 'barre', 'barrita', 'barretta', 'barrette', 'bâtonnet', 'batonnet', 'palito', 'スティック', 'バー', '스틱', '棒', 'แท่ง'],
+  biscuit: ['bánh quy', 'biscuit', 'biscotti', 'biscotto', 'cookie', 'cookies', 'cracker', 'keks', 'kekse', 'galleta', 'sablé', 'ビスケット', 'クッキー', 'クラッカー', '쿠키', '비스킷', '크래커', '饼干', 'บิสกิต', 'คุกกี้'],
+  wafer: ['bánh xốp', 'bánh quế', 'wafer', 'waffel', 'gaufrette', 'ウエハース', '웨이퍼'],
+  burger: ['burger', 'hamburger', 'cheeseburger', 'bánh mì kẹp', 'バーガー', '버거'],
+  pizza: ['pizza', 'ピザ', '피자'],
+  bread: ['bánh mì', 'bread', 'brot', 'brötchen', 'toast', 'sandwich', 'パン', '빵', '面包'],
+  cake: ['bánh bông lan', 'bánh kem', 'cake', 'cupcake', 'muffin', 'kuchen', 'gâteau', 'gateau', 'ケーキ', '케이크', '蛋糕'],
+  candy: ['kẹo', 'candy', 'candies', 'gummy', 'gummies', 'bonbon', 'lollipop', 'グミ', 'キャンディ', '사탕', '糖果'],
+  jelly: ['thạch', 'jelly', 'gelee', 'gelée', 'ゼリー', '젤리', '果冻'],
+  ricecake: ['bánh gạo', 'rice cake', 'rice cracker', 'rice biscuit', 'rice rusk', 'せんべい', '쌀과자', '米饼'],
+  puffs: ['bỏng', 'puff', 'puffs', 'melts', 'ボーロ'],
+  chips: ['bim bim', 'snack khoai', 'chips', 'crisps', 'ポテトチップス', '칩'],
+  yogurt: ['sữa chua', 'yogurt', 'yoghurt', 'joghurt', 'yaourt', 'ヨーグルト', '요거트', '요구르트', '酸奶'],
+  icecream: ['kem', 'ice cream', 'gelato', 'アイス', '아이스크림', '冰淇淋'],
+  sauce: ['sốt', 'xốt', 'nước sốt', 'nước xốt', 'sauce', 'soße', 'dip', 'ソース', '소스'],
+  powder: ['bột', 'powder', 'pulver', 'poudre', 'パウダー', '분말', '粉'],
+  spread: ['spread', 'aufstrich', 'à tartiner', 'cream cheese', 'phô mai kem', 'クリームチーズ'],
+  slice: ['lát', 'slice', 'scheiben', 'tranche', 'スライス', '슬라이스'],
+  cube: ['viên', 'cube', 'würfel', 'キューブ', '큐브'],
+  porridge: ['cháo', 'porridge', 'congee', 'おかゆ', '粥', '죽'],
+  soup: ['súp', 'soup', 'suppe', 'soupe', 'スープ', '수프'],
+  noodles: ['mì', 'mỳ', 'nui', 'pasta', 'noodle', 'nudeln', 'pâtes', 'macaroni', 'うどん', 'そうめん', '국수', '面条'],
+  puree: ['nghiền', 'puree', 'purée', 'pouch', 'quetschie', 'compote', 'ピューレ', '퓨레'],
+  juice: ['nước ép', 'juice', 'saft', 'jus', 'ジュース', '주스', '果汁'],
+};
+const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const FORM_TERMS = Object.entries(FORMS)
+  .flatMap(([form, terms]) => terms.map((t) => [form, t]))
+  .sort((a, b) => b[1].length - a[1].length)
+  .map(([form, t]) => {
+    const body = esc(t).replace(/ /g, '\\s+');
+    const latin = /^[\p{Script=Latin}\s]+$/u.test(t);
+    const re = NO_SPACES.test(t) || /[\p{Script=Hangul}]/u.test(t)
+      ? new RegExp(body, 'gu')
+      : new RegExp(`(?<![\\p{L}\\p{M}\\p{N}])${body}${latin ? '(?:e?s)?' : ''}(?![\\p{L}\\p{M}\\p{N}])`, 'gu');
+    return [form, re];
+  });
+
+// Vietnamese counts use the same words as forms: "Bánh xốp 20 thanh" is 20 wafers, not a bar.
+const COUNTED = /\d+\s*(?:x\s*)?(?:thanh|que|viên|lát|miếng)(?![\p{L}\p{M}])/gu;
+
+// Forms named in a text, earliest first; longer terms win and are consumed first ("bánh mì kẹp" is a burger,
+// not bread + noodles). Consumed text is blanked to the same length so positions stay comparable.
+function formsByPosition(text) {
+  let s = String(text ?? '').normalize('NFC').toLowerCase().replace(COUNTED, (m) => ' '.repeat(m.length));
+  const at = new Map();
+  for (const [form, re] of FORM_TERMS) {
+    re.lastIndex = 0;
+    const m = re.exec(s);
+    if (!m) continue;
+    at.set(form, Math.min(at.get(form) ?? Infinity, m.index));
+    s = s.replace(re, (x) => ' '.repeat(x.length));
+  }
+  return [...at].sort((a, b) => a[1] - b[1]).map(([form]) => form);
+}
+export const productForms = (text) => new Set(formsByPosition(text));
+
+// How an item's title stands against the forms in the user's query:
+// 'match' (names one of them), 'other' (names only different forms), or null (no query form / no form named).
+// Vietnamese puts the head noun first, so there the first form named decides: "Thạch phô mai que" is a jelly.
+export function formMatch(title, queryForms) {
+  if (!queryForms?.size) return null;
+  const forms = formsByPosition(title);
+  if (!forms.length) return null;
+  if (VI_MARKS.test(title)) return queryForms.has(forms[0]) ? 'match' : 'other';
+  return forms.some((f) => queryForms.has(f)) ? 'match' : 'other';
+}
+
+// The query minus its form words, with '|' where they stood so syllable pairs don't bridge the gap.
+// Form words are judged by formMatch (which also accepts synonyms: "que" for "thanh").
+function stripForms(q) {
+  let s = String(q ?? '').normalize('NFC').toLowerCase();
+  for (const [, re] of FORM_TERMS) s = s.replace(re, ' | ');
+  return s;
+}
+
+// Vietnamese words are often two syllables ("phô mai"); matched one by one they hit "ô mai thanh mai".
+// Adjacent syllables of a Vietnamese query must also sit together in the title ("phô mai" / "phomai").
+function syllablePairs(core) {
+  const pairs = [];
+  for (const seg of core.split('|')) {
+    let prev = null;
+    for (const w of seg.split(/[^\p{L}\p{N}\p{M}]+/u).filter(Boolean).map(fold)) {
+      if (STOP.has(w) || NO_SPACES.test(w)) {
+        prev = null;
+        continue;
+      }
+      if (prev) pairs.push([prev, w, new RegExp(`(?<![\\p{L}\\p{N}])${esc(prev)}[\\s-]*${esc(w)}(?![\\p{L}\\p{N}])`, 'u')]);
+      prev = w;
+    }
+  }
+  return pairs;
+}
+
+export const relevance = (title, text, queries) => relevanceDetail(title, text, queries).score;
+
+// score, plus `split`: the best-matching query is Vietnamese and the title has its syllables only apart —
+// a shop's own search engine returns those too, so its trust bonus shouldn't rescue them.
+export function relevanceDetail(title, text, queries) {
   // Folded copies match Latin tokens; raw lowercase copies match CJK bigrams (folding splits kana).
   const ft = fold(title) + '\n' + String(title ?? '').toLowerCase();
   const fx = fold(text) + '\n' + String(text ?? '').toLowerCase();
   const wordsT = new Set(ft.split(/[^\p{L}\p{N}]+/u));
   const wordsX = new Set(fx.split(/[^\p{L}\p{N}]+/u));
   let best = 0;
+  let split = false;
   for (const q of queries) {
-    const qt = tokens(q);
+    const core = stripForms(q);
+    const pairs = VI_MARKS.test(q) ? syllablePairs(core) : [];
+    // "phomai" written as one word counts for both syllables.
+    for (const [a, b] of pairs) {
+      if (wordsT.has(a + b)) wordsT.add(a).add(b);
+      if (wordsX.has(a + b)) wordsX.add(a).add(b);
+    }
+    let qt = tokens(core.replace(/\|/g, ' '));
+    // A query that is only a form ("bánh quy") keeps its words.
+    if (!qt.length) qt = tokens(q);
     if (!qt.length) continue;
     let hitT = 0;
     let hitX = 0;
@@ -269,9 +384,18 @@ export function relevance(title, text, queries) {
       if (matches(t, ft, wordsT)) hitT++;
       else if (matches(t, fx, wordsX)) hitX++;
     }
+    let together = 1;
+    let apart = false;
+    if (pairs.length) {
+      const hit = pairs.reduce((n, [, , re]) => n + (re.test(ft) ? 1 : re.test(fx) ? 0.5 : 0), 0);
+      together = 0.4 + 0.6 * (hit / pairs.length);
+      apart = !hit && (hitT > 0 || VI_MARKS.test(title ?? ''));
+    }
     const phrase = ft.includes(fold(q).trim()) ? 0.25 : 0;
-    best = Math.max(best, (hitT + hitX * 0.4) / qt.length + phrase);
+    const score = ((hitT + hitX * 0.4) / qt.length) * together + phrase;
+    if (score > best || (score === best && !split)) split = apart;
+    best = Math.max(best, score);
   }
   if (BABY_WORDS.test(ft + ' ' + fx) || BABY_CJK.test(title + ' ' + text)) best += 0.15;
-  return Math.round(Math.min(best, 1.4) * 100) / 100;
+  return { score: Math.round(Math.min(best, 1.4) * 100) / 100, split };
 }

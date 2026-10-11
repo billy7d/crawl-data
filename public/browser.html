@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ăn Dặm Radar — cửa sổ đọc trang</title>
+  <style>
+    :root { color-scheme: light dark; --bg: #f7f7f5; --fg: #1d1d1b; --muted: #6b6b66; --card: #fff; --line: #e4e4df; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #161615; --fg: #ececea; --muted: #a2a29c; --card: #1f1f1d; --line: #33332f; } }
+    body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    main { max-width: 620px; margin: 48px auto; padding: 0 16px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px 22px; }
+    h1 { font-size: 20px; margin: 0 0 8px; }
+    p, li { color: var(--muted); }
+    b { color: var(--fg); }
+    #state { margin-top: 14px; font-variant-numeric: tabular-nums; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="card">
+      <h1>Cửa sổ này do Ăn Dặm Radar mở</h1>
+      <p>App dùng cửa sổ này để đọc các trang chặn bot hoặc đang không đọc được qua proxy. Mỗi trang mở trong một tab riêng ở chế độ nền và <b>tự đóng ngay khi đọc xong</b>. Cửa sổ tự đóng sau khi tìm kiếm xong một lúc.</p>
+      <ul>
+        <li>Nếu một tab tự hiện lên phía trước: trang đó cần bạn <b>đăng nhập hoặc xác minh</b>. Làm xong, app tự đọc tiếp. App không tự giải captcha.</li>
+        <li>Đây là hồ sơ trình duyệt riêng của app (thư mục <code>data/browser-profile</code>), tách khỏi Chrome bạn dùng hằng ngày. Đăng nhập ở đây được giữ cho lần sau.</li>
+        <li>Đừng đóng tab này khi đang tìm kiếm.</li>
+      </ul>
+      <p id="state"></p>
+    </div>
+  </main>
+  <script>
+    const el = document.getElementById('state');
+    async function tick() {
+      try {
+        const s = await (await fetch('/api/browser')).json();
+        el.textContent = s.working ? `Đang đọc ${s.working} trang (tối đa ${s.tabs} cùng lúc)…` : 'Đang chờ…';
+      } catch {
+        el.textContent = 'Không kết nối được app — server đã tắt?';
+      }
+    }
+    tick();
+    setInterval(tick, 2000);
+  </script>
+</body>
+</html>
