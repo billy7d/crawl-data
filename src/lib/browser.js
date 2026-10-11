@@ -215,6 +215,23 @@ async function fromPortFile() {
   }
 }
 
+// Third-party cookies off in the app's profile (Chrome's own setting, shown in chrome://settings/cookies): shops
+// keep their own cookies (sign-ins, passed checks), the ad and tracking networks they embed get none.
+// Written while the browser is closed, since Chrome rewrites the file on exit.
+function blockThirdPartyCookies() {
+  const file = path.join(PROFILE_DIR, 'Default', 'Preferences');
+  let prefs = {};
+  try {
+    prefs = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch { /* first run: Chrome fills in the rest */ }
+  prefs.profile ??= {};
+  if (prefs.profile.cookie_controls_mode === 1 && prefs.profile.block_third_party_cookies === true) return;
+  prefs.profile.cookie_controls_mode = 1; // 1 = block third-party cookies
+  prefs.profile.block_third_party_cookies = true;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(prefs));
+}
+
 async function connect() {
   if (conn && !conn.closed) return conn;
   connecting ??= (async () => {
@@ -226,6 +243,7 @@ async function connect() {
         if (!b) throw new HttpError('Không tìm thấy Chrome/Edge/Brave trên máy', 0);
         fs.mkdirSync(PROFILE_DIR, { recursive: true });
         fs.rmSync(PORT_FILE, { force: true });
+        blockThirdPartyCookies();
         const { tabs } = hardware();
         proc = spawn(b.bin, [
           `--user-data-dir=${PROFILE_DIR}`,
